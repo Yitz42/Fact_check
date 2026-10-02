@@ -42,7 +42,8 @@
     for (const [id, name] of models) {
       const opt = document.createElement("option");
       opt.value = id;
-      opt.textContent = name === id ? id : `${name} (${id})`;
+      opt.textContent = name;
+      opt.title = id;
       modelEl.append(opt);
     }
     if (selected && !models.some(([id]) => id === selected)) {
@@ -141,14 +142,9 @@
       });
       tabsEl.append(tab);
     });
-    const add = document.createElement("button");
-    add.type = "button";
-    add.textContent = "+";
-    add.title = "New blank text";
-    add.setAttribute("aria-label", "New blank text");
-    add.addEventListener("click", () => { newDoc("Pasted text", ""); showDoc(); input.focus(); });
-    tabsEl.append(add);
   }
+
+  $("add-doc").addEventListener("click", () => { newDoc("Pasted text", ""); showDoc(); input.focus(); });
 
   function selectDoc(i) {
     active = i;
