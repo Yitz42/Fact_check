@@ -13,8 +13,32 @@
     <p class="sub">Your text stays exactly as written. False claims are highlighted in red, click one for the corrected fact.</p>
   </header>
 
-  <textarea id="input" placeholder="Paste or type your text here…" spellcheck="false" autofocus></textarea>
-  <div id="review" class="review" hidden></div>
+  <section class="settings" aria-label="AI settings">
+    <label class="field">
+      <span>Anthropic API key</span>
+      <input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="field">
+      <span>AI model</span>
+      <span class="row">
+        <select id="model"></select>
+        <button id="load-models" type="button" title="List the models your key can use">Load my models</button>
+      </span>
+    </label>
+    <label class="remember"><input id="remember" type="checkbox"> Remember key on this device</label>
+    <p class="hint">Your key goes only from this page to the local server to Anthropic. It isn't saved unless you tick the box. It must be an API key from console.anthropic.com (a Claude.ai or Claude Code login can't be used here).</p>
+  </section>
+
+  <div class="docs-bar">
+    <div id="tabs" class="tabs" role="tablist"></div>
+    <button id="upload" type="button">Upload files…</button>
+    <input id="file" type="file" multiple hidden accept=".txt,.md,.markdown,.csv,.tsv,.json,.html,.htm,.xml,.log,.pdf,.docx">
+  </div>
+
+  <div id="drop" class="drop">
+    <textarea id="input" placeholder="Paste or type your text here, or drop a file (.txt .md .pdf .docx .html .csv …)" spellcheck="false" autofocus></textarea>
+    <div id="review" class="review" hidden></div>
+  </div>
 
   <div class="bar">
     <button id="check" class="primary">Fact-check</button>

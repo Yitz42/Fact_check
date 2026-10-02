@@ -48,8 +48,9 @@ class Endpoint(unittest.TestCase):
     def tearDown(self):
         self.httpd.shutdown()
 
-    def post(self, body):
-        req = urllib.request.Request(self.url, json.dumps(body).encode(), {"Content-Type": "application/json"})
+    def post(self, body, headers=None):
+        headers = dict(headers or {}, **{"Content-Type": "application/json"})
+        req = urllib.request.Request(self.url, json.dumps(body).encode(), headers)
         try:
             with urllib.request.urlopen(req) as r:
                 return r.status, json.load(r)
@@ -71,8 +72,47 @@ class Endpoint(unittest.TestCase):
     def test_missing_api_key_gives_clear_error(self):
         with mock.patch.dict("os.environ", {}, clear=True):
             status, data = self.post({"text": "hi"})
-        self.assertEqual(status, 500)
-        self.assertIn("ANTHROPIC_API_KEY", data["error"])
+        self.assertEqual(status, 401)
+        self.assertIn("API key", data["error"])
+
+    def test_key_and_model_from_page_reach_anthropic_in_a_valid_request(self):
+        seen = {}
+
+        def fake(req):
+            seen["headers"] = {k.lower(): v for k, v in req.header_items()}
+            seen["body"] = json.loads(req.data)
+            return {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(
+                {"claims": [{"quote": "Germany", "correction": "France", "explanation": "x"}]})}]}
+
+        with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(server, "anthropic_request", fake):
+            status, data = self.post({"text": "Paris is in Germany.", "model": "claude-opus-5-5"},
+                                     {"X-Api-Key": "sk-ant-test"})
+        self.assertEqual(status, 200)
+        self.assertEqual(seen["headers"]["x-api-key"], "sk-ant-test")
+        self.assertEqual(seen["body"]["model"], "claude-opus-5-5")
+        self.assertNotIn("tool_choice", seen["body"])  # forced tool use 400s on the newest models
+        self.assertEqual(seen["body"]["output_config"]["format"]["type"], "json_schema")
+        self.assertEqual(data["claims"][0]["quote"], "Germany")
+
+    def test_bad_model_name_rejected(self):
+        status, _ = self.post({"text": "hi", "model": "x; rm -rf"}, {"X-Api-Key": "k"})
+        self.assertEqual(status, 400)
+
+    def test_models_endpoint_lists_only_claude_models(self):
+        fake = lambda req: {"data": [{"id": "claude-opus-5-5", "display_name": "Claude Opus 5.5"}, {"id": "other"}]}
+        with mock.patch.object(server, "anthropic_request", fake):
+            req = urllib.request.Request(self.url.replace("/check", "/models"), headers={"X-Api-Key": "k"})
+            with urllib.request.urlopen(req) as r:
+                data = json.load(r)
+        self.assertEqual(data["models"], [{"id": "claude-opus-5-5", "name": "Claude Opus 5.5"}])
+
+    def test_foreign_origin_and_non_json_rejected(self):
+        status, _ = self.post({"text": "hi"}, {"Origin": "https://evil.example"})
+        self.assertEqual(status, 403)
+        req = urllib.request.Request(self.url, b'{"text":"hi"}', {"Content-Type": "text/plain"})
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req)
+        self.assertEqual(ctx.exception.code, 400)
 
 
 if __name__ == "__main__":
