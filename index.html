@@ -59,34 +59,35 @@
       <button class="icon" value="close" aria-label="Close">×</button>
     </div>
 
-    <div class="seg" role="radiogroup" aria-label="Engine">
-      <button type="button" role="radio" data-provider="free">Free</button>
-      <button type="button" role="radio" data-provider="anthropic">Claude</button>
-      <button type="button" role="radio" data-provider="ollama">Local</button>
-    </div>
+    <label class="field">
+      <span>AI provider</span>
+      <select id="provider"></select>
+    </label>
 
-    <div class="panel" data-panel="free">
-      <p><strong>No setup, no key.</strong> Runs on a small open model (GPT-OSS 20B) hosted by Pollinations.ai. It's less accurate than Claude, and your text is sent to that service, so don't use it for sensitive documents.</p>
-      <p class="hint">Used automatically whenever no key is entered.</p>
-    </div>
+    <p id="provider-note" class="note"></p>
 
-    <div class="panel" data-panel="anthropic" hidden>
+    <div class="panel" id="panel-key" hidden>
+      <label class="field" id="url-field" hidden>
+        <span>API address</span>
+        <input id="custom-url" type="text" placeholder="https://your-server/v1" autocomplete="off" spellcheck="false">
+      </label>
       <label class="field">
-        <span>Anthropic API key</span>
-        <input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
+        <span id="key-label">API key</span>
+        <input id="key" type="password" placeholder="Paste your key" autocomplete="off" spellcheck="false">
       </label>
       <label class="check"><input id="remember" type="checkbox"> Remember key on this device</label>
       <label class="field">
         <span>Model</span>
         <span class="row">
-          <select id="model"></select>
+          <input id="model" type="text" list="model-list" placeholder="Model name" autocomplete="off" spellcheck="false">
+          <datalist id="model-list"></datalist>
           <button id="load-models" class="ghost" type="button" title="List the models your key can use">Load my models</button>
         </span>
       </label>
-      <p class="hint">Use an API key from console.anthropic.com (a Claude.ai or Claude Code login won't work). It goes straight from this page to Anthropic and is only saved if you tick the box. Without a key, the free model is used.</p>
+      <p id="key-hint" class="hint"></p>
     </div>
 
-    <div class="panel" data-panel="ollama" hidden>
+    <div class="panel" id="panel-ollama" hidden>
       <label class="field">
         <span>Ollama address</span>
         <input id="ollama-url" type="text" placeholder="http://localhost:11434" autocomplete="off" spellcheck="false">
@@ -98,7 +99,7 @@
           <button id="detect-ollama" class="ghost" type="button">Detect models</button>
         </span>
       </label>
-      <p class="hint"><strong>Private:</strong> your text never leaves your computer. Install <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>, run <code>ollama pull llama3.1</code>, then start it with <code>OLLAMA_ORIGINS=* ollama serve</code>. Optional: nothing else needs it.</p>
+      <p class="hint">Install <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>, run <code>ollama pull llama3.1</code>, then start it with <code>OLLAMA_ORIGINS=* ollama serve</code>. Optional: nothing else needs it.</p>
     </div>
 
     <p id="settings-status" class="settings-status" role="status"></p>

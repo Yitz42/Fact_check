@@ -24,14 +24,23 @@ then visit http://127.0.0.1:8000. To use it on a phone, put the folder on any st
 
 ## Choose the AI (button in the top bar)
 
-| Engine | Setup | Where your text goes |
+| Provider | Needs | Where your text goes |
 |---|---|---|
-| **Free** (default) | none | GPT-OSS 20B on Pollinations.ai. Less accurate; not for sensitive documents. |
-| **Claude** | paste an API key from [console.anthropic.com](https://console.anthropic.com) and pick a model ("Load my models" lists what your key can use) | Straight to Anthropic. Key is kept for the session, or on the device if you tick "Remember". |
-| **Local** (optional) | install [Ollama](https://ollama.com), `ollama pull llama3.1`, run `OLLAMA_ORIGINS=* ollama serve`, then "Detect models" | Stays on your computer. |
+| **Free** (default) | nothing | GPT-OSS 20B on Pollinations.ai. Less accurate; not for sensitive documents. |
+| **Claude** (Anthropic) | API key from [console.anthropic.com](https://console.anthropic.com/settings/keys) | Straight to Anthropic |
+| **ChatGPT** (OpenAI) | API key from [platform.openai.com](https://platform.openai.com/api-keys) | Straight to OpenAI |
+| **Gemini** (Google) | API key from [aistudio.google.com](https://aistudio.google.com/apikey) (has a free tier) | Straight to Google |
+| **Mistral**, **Groq**, **OpenRouter**, **Grok** (xAI), **DeepSeek** | that service's API key | Straight to that service |
+| **Other** | any OpenAI-compatible address (LM Studio, a company gateway, ...), key optional | That server |
+| **Ollama** (optional, private) | install [Ollama](https://ollama.com), `ollama pull llama3.1`, run `OLLAMA_ORIGINS=* ollama serve`, then "Detect models" | Stays on your computer |
 
-With no key entered, the free model is used automatically. A Claude.ai or Claude Code
-login can't be used by other apps; it must be an API key.
+Each cloud provider has its own key box, model box (type a name or "Load my models" to list
+what your key can use) and "Remember key on this device" option. Keys are sent only to that
+provider and are kept for the browser session unless you tick Remember. With no key entered,
+the free model is used automatically.
+
+These are API keys, not chat logins: a Claude.ai, Claude Code or ChatGPT subscription can't
+be used by other apps.
 
 ## Files
 
@@ -44,7 +53,7 @@ Long documents are checked in pieces, so size is limited only by the AI service'
 
 ## Test
 
-Open `tests.html` in a browser (served as above). The tab title says `ALL n PASSED`.
+Open `tests.html` in a browser (served as above). The tab title says `ALL n PASSED`. The tests cover quote matching, chunking, and the request format of every provider.
 
 ## Limits
 

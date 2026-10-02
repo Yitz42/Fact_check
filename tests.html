@@ -94,7 +94,7 @@
 
   await test("anthropic: direct-browser request, structured output, no forced tool_choice", async () => {
     const calls = stubFetch(() => ({ json: { stop_reason: "end_turn", content: [{ type: "text", text: claimJson("Germany") }] } }));
-    const r = await C.checkText("Paris is in Germany.", { kind: "anthropic", key: "sk-ant-x", model: "claude-opus-5-5" });
+    const r = await C.checkText("Paris is in Germany.", C.engineFor("anthropic", { key: "sk-ant-x", model: "claude-opus-5-5" }));
     const c = calls[0];
     ok(c.url === "https://api.anthropic.com/v1/messages");
     ok(c.headers["x-api-key"] === "sk-ant-x" && c.headers["anthropic-dangerous-direct-browser-access"] === "true");
@@ -106,27 +106,96 @@
     const calls = stubFetch((url, body, n) => n === 1
       ? { status: 400, json: { error: { message: "output_config.format is not supported for this model" } } }
       : { json: { stop_reason: "end_turn", content: [{ type: "text", text: claimJson("Germany") }] } });
-    const r = await C.checkText("Paris is in Germany.", { kind: "anthropic", key: "k", model: "claude-old" });
+    const r = await C.checkText("Paris is in Germany.", C.engineFor("anthropic", { key: "k", model: "claude-old" }));
     ok(calls.length === 2 && !("output_config" in calls[1].body) && r.claims.length === 1);
   });
   await test("anthropic: bad key surfaces a clear message", async () => {
     stubFetch(() => ({ status: 401, json: { error: { message: "invalid x-api-key" } } }));
     let msg = "";
-    try { await C.checkText("hi there", { kind: "anthropic", key: "bad" }); } catch (e) { msg = e.message; }
+    try { await C.checkText("hi there", C.engineFor("anthropic", { key: "bad" })); } catch (e) { msg = e.message; }
     ok(/key was rejected/.test(msg), msg);
   });
   await test("free: keyless request to the free endpoint, no key header", async () => {
     const calls = stubFetch(() => ({ json: { choices: [{ message: { content: claimJson("Germany") } }] } }));
-    const r = await C.checkText("Paris is in Germany.", { kind: "free" });
+    const r = await C.checkText("Paris is in Germany.", C.engineFor("free"));
     ok(calls[0].url === "https://text.pollinations.ai/openai");
     ok(!("x-api-key" in calls[0].headers) && calls[0].body.model === C.FREE_MODEL);
     ok(r.claims.length === 1);
   });
   await test("ollama: posts to the local address with a JSON schema", async () => {
     const calls = stubFetch(() => ({ json: { message: { content: claimJson("Germany") } } }));
-    const r = await C.checkText("Paris is in Germany.", { kind: "ollama", url: "http://localhost:11434/", model: "llama3.1" });
+    const r = await C.checkText("Paris is in Germany.", C.engineFor("ollama", { base: "http://localhost:11434/", model: "llama3.1" }));
     ok(calls[0].url === "http://localhost:11434/api/chat" && calls[0].body.model === "llama3.1");
     ok(calls[0].body.stream === false && calls[0].body.format.type === "object" && r.claims.length === 1);
+  });
+
+  await test("openai: bearer key, JSON mode, no max_tokens/temperature, chat-completions URL", async () => {
+    const calls = stubFetch(() => ({ json: { choices: [{ message: { content: claimJson("Germany") }, finish_reason: "stop" }] } }));
+    const r = await C.checkText("Paris is in Germany.", C.engineFor("openai", { key: "sk-oai", model: "gpt-4o-mini" }));
+    const c = calls[0];
+    ok(c.url === "https://api.openai.com/v1/chat/completions" && c.headers.authorization === "Bearer sk-oai");
+    ok(c.body.model === "gpt-4o-mini" && c.body.response_format.type === "json_object");
+    ok(!("max_tokens" in c.body) && !("temperature" in c.body));
+    ok(r.claims.length === 1 && r.claims[0].start === 12);
+  });
+  await test("openai-style providers hit their own addresses", async () => {
+    const want = { mistral: "https://api.mistral.ai/v1/chat/completions", groq: "https://api.groq.com/openai/v1/chat/completions",
+      openrouter: "https://openrouter.ai/api/v1/chat/completions", xai: "https://api.x.ai/v1/chat/completions",
+      deepseek: "https://api.deepseek.com/chat/completions" };
+    for (const [id, url] of Object.entries(want)) {
+      const calls = stubFetch(() => ({ json: { choices: [{ message: { content: '{"claims":[]}' } }] } }));
+      await C.checkText("hello there", C.engineFor(id, { key: "k" }));
+      ok(calls[0].url === url, id + " -> " + calls[0].url);
+    }
+  });
+  await test("openai: retries without response_format if the server rejects JSON mode", async () => {
+    const calls = stubFetch((u, b, n) => n === 1
+      ? { status: 400, json: { error: { message: "response_format json_object is not supported" } } }
+      : { json: { choices: [{ message: { content: claimJson("Germany") } }] } });
+    const r = await C.checkText("Paris is in Germany.", C.engineFor("openai", { key: "k", model: "x" }));
+    ok(calls.length === 2 && !("response_format" in calls[1].body) && r.claims.length === 1);
+  });
+  await test("openai: reply cut off by length gives a clear error", async () => {
+    stubFetch(() => ({ json: { choices: [{ message: { content: "{" }, finish_reason: "length" }] } }));
+    let msg = "";
+    try { await C.checkText("hello there", C.engineFor("openai", { key: "k", model: "x" })); } catch (e) { msg = e.message; }
+    ok(/cut off/.test(msg), msg);
+  });
+  await test("custom: OpenAI-compatible address, no key header when key is empty", async () => {
+    const calls = stubFetch(() => ({ json: { choices: [{ message: { content: claimJson("Germany") } }] } }));
+    const r = await C.checkText("Paris is in Germany.", C.engineFor("custom", { base: "http://localhost:1234/v1/", model: "local-model" }));
+    ok(calls[0].url === "http://localhost:1234/v1/chat/completions" && !("authorization" in calls[0].headers));
+    ok(r.claims.length === 1);
+  });
+  await test("gemini: key header, model in URL, JSON mime type, system instruction", async () => {
+    const calls = stubFetch(() => ({ json: { candidates: [{ content: { parts: [{ text: "thinking...", thought: true }, { text: claimJson("Germany") }] }, finishReason: "STOP" }] } }));
+    const r = await C.checkText("Paris is in Germany.", C.engineFor("gemini", { key: "AIza-x", model: "models/gemini-2.5-flash" }));
+    const c = calls[0];
+    ok(c.url === "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent", c.url);
+    ok(c.headers["x-goog-api-key"] === "AIza-x" && c.body.generationConfig.responseMimeType === "application/json");
+    ok(c.body.systemInstruction.parts[0].text === C.SYSTEM_PROMPT && r.claims.length === 1);
+  });
+  await test("gemini: blocked prompt gives a clear error", async () => {
+    stubFetch(() => ({ json: { promptFeedback: { blockReason: "SAFETY" } } }));
+    let msg = "";
+    try { await C.checkText("hello there", C.engineFor("gemini", { key: "k" })); } catch (e) { msg = e.message; }
+    ok(/declined/.test(msg), msg);
+  });
+  await test("listModels: openai filters out non-chat models; gemini keeps generateContent ones", async () => {
+    stubFetch(() => ({ json: { data: [{ id: "gpt-4o" }, { id: "text-embedding-3-small" }, { id: "whisper-1" }, { id: "gpt-4o-mini" }] } }));
+    const o = await C.listModels("openai", { key: "k" });
+    ok(eq(o.map((m) => m.id), ["gpt-4o", "gpt-4o-mini"]), JSON.stringify(o));
+    stubFetch(() => ({ json: { models: [
+      { name: "models/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", supportedGenerationMethods: ["generateContent"] },
+      { name: "models/embedding-001", supportedGenerationMethods: ["embedContent"] }] } }));
+    const g = await C.listModels("gemini", { key: "k" });
+    ok(g.length === 1 && g[0].id === "gemini-2.5-flash");
+  });
+  await test("every cloud provider needs a model default or a way to list models", () => {
+    for (const p of C.PROVIDERS) {
+      if (p.group === "cloud" && !p.needsUrl) ok(p.defaultModel && p.base || p.api === "anthropic", p.id);
+    }
+    ok(C.PROVIDERS.every((p, i, a) => a.findIndex((q) => q.id === p.id) === i), "duplicate provider id");
   });
   await test("long text is checked in pieces and offsets line up with the whole text", async () => {
     const filler = "This is a perfectly true sentence about nothing. ".repeat(300);
@@ -137,7 +206,7 @@
       const has = body.messages[1].content.includes("made of cheese");
       return { json: { choices: [{ message: { content: has ? claimJson("made of cheese") : '{"claims":[]}' } }] } };
     });
-    const r = await C.checkText(text, { kind: "free" });
+    const r = await C.checkText(text, C.engineFor("free"));
     ok(parts > 1, "expected several parts, got " + parts);
     ok(r.claims.length === 1 && text.slice(r.claims[0].start, r.claims[0].end) === "made of cheese");
   });
@@ -146,11 +215,11 @@
     stubFetch((url, body) => body.messages[1].content.includes("cheese")
       ? { json: { choices: [{ message: { content: claimJson("made of cheese") } }] } }
       : { json: { choices: [{ message: { content: "not json" } }] } });
-    const r = await C.checkText(text, { kind: "free" });
+    const r = await C.checkText(text, C.engineFor("free"));
     ok(r.claims.length === 1 && r.failedParts >= 1);
     stubFetch(() => ({ json: { choices: [{ message: { content: "not json" } }] } }));
     let threw = false;
-    try { await C.checkText(text, { kind: "free" }); } catch (_) { threw = true; }
+    try { await C.checkText(text, C.engineFor("free")); } catch (_) { threw = true; }
     ok(threw);
   });
   window.fetch = realFetch;

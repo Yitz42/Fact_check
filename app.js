@@ -18,18 +18,21 @@
   const keyEl = $("key");
   const rememberEl = $("remember");
   const modelEl = $("model");
+  const modelListEl = $("model-list");
+  const providerEl = $("provider");
+  const providerNoteEl = $("provider-note");
+  const panelKeyEl = $("panel-key");
+  const panelOllamaEl = $("panel-ollama");
+  const urlFieldEl = $("url-field");
+  const customUrlEl = $("custom-url");
+  const keyLabelEl = $("key-label");
+  const keyHintEl = $("key-hint");
   const ollamaUrlEl = $("ollama-url");
   const ollamaModelEl = $("ollama-model");
 
   const Core = window.FactCore;
   const MAX_CHARS = 200000;
   const MAX_FILE_BYTES = 20 * 1024 * 1024;
-  const CLAUDE_MODELS = [
-    ["claude-sonnet-5-5", "Claude Sonnet 5.5"],
-    ["claude-opus-5-5", "Claude Opus 5.5"],
-    ["claude-fable-5-1", "Claude Fable 5.1"],
-    ["claude-haiku-4-5", "Claude Haiku 4.5"],
-  ];
   const LIBS = {
     pdf: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
     docx: "https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js",
@@ -44,63 +47,135 @@
   };
 
   // ---------- engine settings (behind the button in the top bar) ----------
-  const settings = {
-    provider: store.get("localStorage", "fc_provider") || "free",
-    claudeModel: store.get("localStorage", "fc_amodel") || Core.DEFAULT_ANTHROPIC_MODEL,
-    ollamaUrl: store.get("localStorage", "fc_ourl") || Core.DEFAULT_OLLAMA_URL,
-    ollamaModel: store.get("localStorage", "fc_omodel") || "",
+  const P = Core.providerById;
+  const cfg = { provider: "free", models: {}, urls: {} };
+  try { Object.assign(cfg, JSON.parse(store.get("localStorage", "fc_cfg") || "{}")); } catch (_) { /* start fresh */ }
+  if (!Core.PROVIDERS.some((p) => p.id === cfg.provider)) cfg.provider = "free";
+  cfg.models = cfg.models || {};
+  cfg.urls = cfg.urls || {};
+  const saveCfg = () => store.set("localStorage", "fc_cfg", JSON.stringify(cfg));
+
+  // Keys live in memory per provider; each is saved under its own storage key.
+  const keys = {};
+  for (const p of Core.PROVIDERS) {
+    keys[p.id] = store.get("localStorage", `fc_key_${p.id}`) || store.get("sessionStorage", `fc_key_${p.id}`) || "";
+  }
+  // Older versions saved a single Claude key.
+  keys.anthropic = keys.anthropic || store.get("localStorage", "fc_key") || store.get("sessionStorage", "fc_key") || "";
+  const remembered = (id) => Boolean(store.get("localStorage", `fc_key_${id}`) || (id === "anthropic" && store.get("localStorage", "fc_key")));
+
+  const loadedModels = {}; // provider id -> [{id, name}] from "Load my models"
+  const modelName = (p, id) => {
+    const hit = (loadedModels[p.id] || []).concat((p.models || []).map(([i, n]) => ({ id: i, name: n }))).find((m) => m.id === id);
+    return hit ? hit.name : id;
   };
 
-  function fillSelect(select, models, selected, emptyText) {
-    select.replaceChildren();
+  function fillProviders() {
+    const groups = [["free", "Free"], ["cloud", "Cloud (needs your API key)"], ["private", "Private (stays on your computer)"]];
+    for (const [group, label] of groups) {
+      const og = document.createElement("optgroup");
+      og.label = label;
+      for (const p of Core.PROVIDERS.filter((x) => x.group === group)) {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.textContent = p.label;
+        og.append(opt);
+      }
+      providerEl.append(og);
+    }
+  }
+
+  function fillModelList(p) {
+    const list = loadedModels[p.id] || (p.models || []).map(([id, name]) => ({ id, name }));
+    modelListEl.replaceChildren();
+    for (const m of list) {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      if (m.name !== m.id) opt.label = m.name;
+      modelListEl.append(opt);
+    }
+  }
+
+  function fillOllamaModels(models, selected) {
+    ollamaModelEl.replaceChildren();
     if (!models.length) {
       const opt = document.createElement("option");
       opt.value = "";
-      opt.textContent = emptyText || "No models";
-      select.append(opt);
+      opt.textContent = "Click “Detect models”";
+      ollamaModelEl.append(opt);
       return;
     }
-    const list = models.slice();
-    if (selected && !list.some(([id]) => id === selected)) list.push([selected, selected]);
-    for (const [id, name] of list) {
+    for (const id of models.some((m) => m === selected) || !selected ? models : models.concat(selected)) {
       const opt = document.createElement("option");
       opt.value = id;
-      opt.textContent = name;
-      opt.title = id;
-      select.append(opt);
+      opt.textContent = id;
+      ollamaModelEl.append(opt);
     }
-    select.value = selected && list.some(([id]) => id === selected) ? selected : list[0][0];
+    ollamaModelEl.value = selected && [...ollamaModelEl.options].some((o) => o.value === selected) ? selected : models[0];
   }
 
-  function saveKey() {
-    store.del("localStorage", "fc_key");
-    store.del("sessionStorage", "fc_key");
-    if (keyEl.value) store.set(rememberEl.checked ? "localStorage" : "sessionStorage", "fc_key", keyEl.value);
-    refreshEngine();
-  }
-
-  // The engine actually used: Claude only with a key, Ollama only once a model is chosen,
+  // The engine actually used: the chosen provider if it's usable (key entered / model chosen),
   // otherwise the free model.
   function currentEngine() {
-    const key = keyEl.value.trim();
-    if (settings.provider === "anthropic" && key) {
-      const name = modelEl.options[modelEl.selectedIndex];
-      return { kind: "anthropic", key, model: modelEl.value || settings.claudeModel, label: name ? name.textContent : settings.claudeModel };
+    const p = P(cfg.provider);
+    const free = Core.engineFor("free");
+    if (p.id === "free") return free;
+    if (p.api === "ollama") {
+      const model = cfg.models.ollama;
+      return model ? Core.engineFor("ollama", { model, base: cfg.urls.ollama || Core.DEFAULT_OLLAMA_URL }) : free;
     }
-    if (settings.provider === "ollama" && settings.ollamaModel) {
-      return { kind: "ollama", url: settings.ollamaUrl, model: settings.ollamaModel, label: `${settings.ollamaModel} (on your computer)` };
-    }
-    return { kind: "free", label: "Free model" };
+    const key = (keys[p.id] || "").trim();
+    if (!key && !p.keyOptional) return free;
+    const base = p.needsUrl ? (cfg.urls[p.id] || "").trim() : "";
+    const model = (cfg.models[p.id] || p.defaultModel || "").trim();
+    if (p.needsUrl && (!base || !model)) return free;
+    const engine = Core.engineFor(p.id, { key, model, base });
+    engine.label = `${p.short} · ${modelName(p, model)}`;
+    return engine;
   }
 
   function refreshEngine() {
     const engine = currentEngine();
     engineLabel.textContent = engine.label;
-    engineBtn.dataset.kind = engine.kind;
-    document.querySelectorAll(".seg [data-provider]").forEach((b) => {
-      b.setAttribute("aria-checked", String(b.dataset.provider === settings.provider));
-    });
-    document.querySelectorAll("[data-panel]").forEach((p) => { p.hidden = p.dataset.panel !== settings.provider; });
+    engineBtn.dataset.kind = engine.id === "free" ? "free" : P(engine.id).group === "private" ? "ollama" : "anthropic";
+  }
+
+  // Show the right fields for the provider picked in the sheet.
+  function showProvider() {
+    const p = P(cfg.provider);
+    providerEl.value = p.id;
+    const isOllama = p.api === "ollama";
+    const isFree = p.id === "free";
+    panelKeyEl.hidden = isFree || isOllama;
+    panelOllamaEl.hidden = !isOllama;
+    providerNoteEl.textContent = p.privacy || (isOllama ? "" : `Your text is sent to ${p.short === "Custom" ? "that server" : p.label.replace(/ \(.*/, "")}. Without a key, the free model is used instead.`);
+    if (isFree || isOllama) return;
+    urlFieldEl.hidden = !p.needsUrl;
+    customUrlEl.value = cfg.urls[p.id] || "";
+    keyLabelEl.textContent = p.keyOptional ? "API key (optional)" : `${p.short} API key`;
+    keyEl.value = keys[p.id] || "";
+    rememberEl.checked = remembered(p.id);
+    modelEl.value = cfg.models[p.id] || p.defaultModel || "";
+    modelEl.placeholder = p.defaultModel || "Model name";
+    fillModelList(p);
+    keyHintEl.replaceChildren();
+    if (p.keyUrl) {
+      keyHintEl.append("Get a key at ");
+      const a = document.createElement("a");
+      a.href = p.keyUrl; a.target = "_blank"; a.rel = "noopener"; a.textContent = p.keyHost;
+      keyHintEl.append(a, ". ");
+    }
+    keyHintEl.append(`${p.keyNote ? p.keyNote + " " : ""}It goes straight from this page to ${p.needsUrl ? "that server" : p.short} and is only saved if you tick the box.`);
+  }
+
+  function saveKey() {
+    const id = cfg.provider;
+    keys[id] = keyEl.value;
+    store.del("localStorage", `fc_key_${id}`);
+    store.del("sessionStorage", `fc_key_${id}`);
+    if (id === "anthropic") { store.del("localStorage", "fc_key"); store.del("sessionStorage", "fc_key"); }
+    if (keyEl.value) store.set(rememberEl.checked ? "localStorage" : "sessionStorage", `fc_key_${id}`, keyEl.value);
+    refreshEngine();
   }
 
   function setSettingsStatus(message, isError) {
@@ -108,51 +183,55 @@
     settingsStatus.classList.toggle("error", Boolean(isError));
   }
 
-  keyEl.value = store.get("localStorage", "fc_key") || store.get("sessionStorage", "fc_key") || "";
-  rememberEl.checked = Boolean(store.get("localStorage", "fc_key"));
-  fillSelect(modelEl, CLAUDE_MODELS, settings.claudeModel);
-  fillSelect(ollamaModelEl, settings.ollamaModel ? [[settings.ollamaModel, settings.ollamaModel]] : [], settings.ollamaModel, "Click “Detect models”");
-  ollamaUrlEl.value = settings.ollamaUrl;
+  fillProviders();
+  fillOllamaModels(cfg.models.ollama ? [cfg.models.ollama] : [], cfg.models.ollama);
+  ollamaUrlEl.value = cfg.urls.ollama || Core.DEFAULT_OLLAMA_URL;
+  showProvider();
   refreshEngine();
 
-  engineBtn.addEventListener("click", () => { setSettingsStatus(""); dialog.showModal(); });
+  engineBtn.addEventListener("click", () => { setSettingsStatus(""); showProvider(); dialog.showModal(); });
   dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
-  document.querySelectorAll(".seg [data-provider]").forEach((b) => b.addEventListener("click", () => {
-    settings.provider = b.dataset.provider;
-    store.set("localStorage", "fc_provider", settings.provider);
+  providerEl.addEventListener("change", () => {
+    cfg.provider = providerEl.value;
+    saveCfg();
     setSettingsStatus("");
+    showProvider();
     refreshEngine();
-  }));
+  });
   keyEl.addEventListener("input", saveKey);
   rememberEl.addEventListener("change", saveKey);
-  modelEl.addEventListener("change", () => {
-    settings.claudeModel = modelEl.value;
-    store.set("localStorage", "fc_amodel", modelEl.value);
+  modelEl.addEventListener("input", () => { cfg.models[cfg.provider] = modelEl.value.trim(); saveCfg(); refreshEngine(); });
+  customUrlEl.addEventListener("input", () => { cfg.urls[cfg.provider] = customUrlEl.value.trim(); saveCfg(); refreshEngine(); });
+  ollamaUrlEl.addEventListener("change", () => {
+    cfg.urls.ollama = ollamaUrlEl.value.trim() || Core.DEFAULT_OLLAMA_URL;
+    saveCfg();
     refreshEngine();
   });
-  ollamaUrlEl.addEventListener("change", () => {
-    settings.ollamaUrl = ollamaUrlEl.value.trim() || Core.DEFAULT_OLLAMA_URL;
-    store.set("localStorage", "fc_ourl", settings.ollamaUrl);
-  });
   ollamaModelEl.addEventListener("change", () => {
-    settings.ollamaModel = ollamaModelEl.value;
-    store.set("localStorage", "fc_omodel", settings.ollamaModel);
+    cfg.models.ollama = ollamaModelEl.value;
+    saveCfg();
     refreshEngine();
   });
 
   $("load-models").addEventListener("click", async (e) => {
     const btn = e.currentTarget;
-    if (!keyEl.value.trim()) return setSettingsStatus("Enter your API key first.", true);
+    const p = P(cfg.provider);
+    if (!keyEl.value.trim() && !p.keyOptional) return setSettingsStatus("Enter your API key first.", true);
     btn.disabled = true;
     setSettingsStatus("Loading models…");
     try {
-      const models = await Core.listAnthropicModels(keyEl.value.trim());
-      if (!models.length) throw new Error("No Claude models were returned for this key.");
-      fillSelect(modelEl, models.map((m) => [m.id, m.name]), modelEl.value);
-      settings.claudeModel = modelEl.value;
-      store.set("localStorage", "fc_amodel", modelEl.value);
+      const models = await Core.listModels(p.id, { key: keyEl.value.trim(), base: (cfg.urls[p.id] || "").trim() });
+      if (!models.length) throw new Error("No models were returned for this key.");
+      loadedModels[p.id] = models;
+      fillModelList(p);
+      // If the starting default isn't offered to this key, move to one that is.
+      if (!cfg.models[p.id] && !models.some((m) => m.id === p.defaultModel)) {
+        cfg.models[p.id] = models[0].id;
+        modelEl.value = models[0].id;
+        saveCfg();
+      }
       refreshEngine();
-      setSettingsStatus(`${models.length} models available.`);
+      setSettingsStatus(`${models.length} models available. Click the Model box to choose one.`);
     } catch (err) {
       setSettingsStatus(err.message, true);
     } finally {
@@ -162,16 +241,16 @@
 
   $("detect-ollama").addEventListener("click", async (e) => {
     const btn = e.currentTarget;
-    settings.ollamaUrl = ollamaUrlEl.value.trim() || Core.DEFAULT_OLLAMA_URL;
-    store.set("localStorage", "fc_ourl", settings.ollamaUrl);
+    cfg.urls.ollama = ollamaUrlEl.value.trim() || Core.DEFAULT_OLLAMA_URL;
+    saveCfg();
     btn.disabled = true;
     setSettingsStatus("Looking for Ollama…");
     try {
-      const models = await Core.listOllamaModels(settings.ollamaUrl);
+      const models = (await Core.listModels("ollama", { base: cfg.urls.ollama })).map((m) => m.id);
       if (!models.length) throw new Error("Ollama is running but has no models. Run: ollama pull llama3.1");
-      fillSelect(ollamaModelEl, models.map((m) => [m.id, m.name]), settings.ollamaModel);
-      settings.ollamaModel = ollamaModelEl.value;
-      store.set("localStorage", "fc_omodel", settings.ollamaModel);
+      fillOllamaModels(models, cfg.models.ollama);
+      cfg.models.ollama = ollamaModelEl.value;
+      saveCfg();
       refreshEngine();
       setSettingsStatus(`Found ${models.length} model${models.length === 1 ? "" : "s"} on your computer.`);
     } catch (err) {
@@ -354,7 +433,7 @@
       doc.claims = result.claims;
       doc.unplaced = result.unplaced;
       const notes = [`Checked with ${engine.label}.`];
-      if (settings.provider === "anthropic" && engine.kind === "free") notes.push("(No API key set, so the free model was used.)");
+      if (cfg.provider !== "free" && engine.id === "free") notes.push("(Your chosen AI isn't set up yet, so the free model was used.)");
       if (result.failedParts) notes.push(`${result.failedParts} of ${result.parts} parts couldn't be checked.`);
       doc.note = notes.join(" ");
       if (current() === doc) showDoc(); else renderTabs();
