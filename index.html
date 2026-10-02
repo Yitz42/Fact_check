@@ -76,14 +76,15 @@
         <input id="key" type="password" placeholder="Paste your key" autocomplete="off" spellcheck="false">
       </label>
       <label class="check"><input id="remember" type="checkbox"> Remember key on this device</label>
-      <label class="field">
+      <div class="field">
         <span>Model</span>
         <span class="row">
-          <input id="model" type="text" list="model-list" placeholder="Model name" autocomplete="off" spellcheck="false">
-          <datalist id="model-list"></datalist>
+          <input id="model" type="text" placeholder="Search, or type a model name" autocomplete="off" spellcheck="false" aria-label="Model">
           <button id="load-models" class="ghost" type="button" title="List the models your key can use">Load my models</button>
         </span>
-      </label>
+        <div id="model-menu" class="menu" role="listbox" aria-label="Models"></div>
+        <span class="hint">Recently used first, then the models most likely to get facts right. The ranking is a rule of thumb (bigger, newer models tend to be more accurate), not a benchmark.</span>
+      </div>
       <p id="key-hint" class="hint"></p>
     </div>
 

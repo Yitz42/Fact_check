@@ -191,6 +191,27 @@
     const g = await C.listModels("gemini", { key: "k" });
     ok(g.length === 1 && g[0].id === "gemini-2.5-flash");
   });
+  await test("ranking: bigger/newer models first, mini/lite/haiku last (per provider)", () => {
+    const order = (ids) => C.rankModels(ids.map((id) => ({ id, name: id }))).map((m) => m.id);
+    ok(eq(order(["claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-4-8"]),
+      ["claude-opus-5-5", "claude-opus-4-8", "claude-sonnet-5-5", "claude-haiku-4-5"]), "claude: " + order(["claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-4-8"]));
+    const oa = order(["gpt-4o-mini", "o3-mini", "gpt-4o-2024-08-06", "gpt-4o", "gpt-5"]);
+    ok(oa[0] === "gpt-5" && oa[1] === "gpt-4o" && oa.indexOf("gpt-4o") < oa.indexOf("gpt-4o-mini") && oa.indexOf("gpt-4o") < oa.indexOf("gpt-4o-2024-08-06") && oa[oa.length - 1] === "o3-mini", "openai: " + oa);
+    ok(eq(order(["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"]), ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]));
+    ok(eq(order(["llama-3.1-8b-instant", "llama-3.3-70b-versatile"]), ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]));
+    ok(eq(order(["mistral-small-latest", "mistral-large-latest"]), ["mistral-large-latest", "mistral-small-latest"]));
+    ok(order(["gemini-2.0-pro-exp", "gemini-2.5-pro"])[0] === "gemini-2.5-pro", "experimental ranks below stable");
+  });
+  await test("ranking: at most 3 recommended, none from the small tier", () => {
+    const r = C.rankModels(["a-mini", "claude-opus-5-5", "claude-opus-4-8", "gpt-5", "gemini-2.5-pro", "x-lite"].map((id) => ({ id, name: id })));
+    ok(r.filter((m) => m.recommended).length === 3);
+    ok(r.filter((m) => m.recommended).every((m) => !/(^|[^a-z])mini(?![a-z])|lite/.test(m.id)));
+  });
+  await test("provider defaults are not the small/cheap variants", () => {
+    for (const p of C.PROVIDERS.filter((p) => p.group === "cloud" && p.defaultModel)) {
+      ok(!/(^|[^a-z])mini(?![a-z])|lite|small|haiku|instant/.test(p.defaultModel), p.id + " -> " + p.defaultModel);
+    }
+  });
   await test("every cloud provider needs a model default or a way to list models", () => {
     for (const p of C.PROVIDERS) {
       if (p.group === "cloud" && !p.needsUrl) ok(p.defaultModel && p.base || p.api === "anthropic", p.id);

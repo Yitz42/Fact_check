@@ -56,19 +56,19 @@
       url: FREE_ENDPOINT, defaultModel: FREE_MODEL, extra: { max_tokens: 8000 }, noKey: true,
       privacy: "Runs on a small open model (GPT-OSS 20B) hosted by Pollinations.ai. It's less accurate than the others, and your text is sent to that service, so don't use it for sensitive documents." },
     { id: "anthropic", label: "Claude (Anthropic)", short: "Claude", api: "anthropic", group: "cloud", chunk: CHUNK.large,
-      defaultModel: DEFAULT_ANTHROPIC_MODEL, keyUrl: "https://console.anthropic.com/settings/keys", keyHost: "console.anthropic.com",
+      defaultModel: "claude-opus-5-5", keyUrl: "https://console.anthropic.com/settings/keys", keyHost: "console.anthropic.com",
       models: [["claude-sonnet-5-5", "Claude Sonnet 5.5"], ["claude-opus-5-5", "Claude Opus 5.5"], ["claude-fable-5-1", "Claude Fable 5.1"], ["claude-haiku-4-5", "Claude Haiku 4.5"]],
       keyNote: "It must be an API key (a Claude.ai or Claude Code login won't work)." },
     { id: "openai", label: "ChatGPT (OpenAI)", short: "ChatGPT", api: "openai", group: "cloud", chunk: CHUNK.large,
-      base: "https://api.openai.com/v1", defaultModel: "gpt-4o-mini", keyUrl: "https://platform.openai.com/api-keys", keyHost: "platform.openai.com",
+      base: "https://api.openai.com/v1", defaultModel: "gpt-4o", keyUrl: "https://platform.openai.com/api-keys", keyHost: "platform.openai.com",
       models: [["gpt-4o-mini", "gpt-4o-mini"], ["gpt-4o", "gpt-4o"]],
       keyNote: "It must be an API key (a ChatGPT subscription login won't work)." },
     { id: "gemini", label: "Gemini (Google)", short: "Gemini", api: "gemini", group: "cloud", chunk: CHUNK.large,
-      base: "https://generativelanguage.googleapis.com/v1beta", defaultModel: "gemini-2.5-flash", keyUrl: "https://aistudio.google.com/apikey", keyHost: "aistudio.google.com",
+      base: "https://generativelanguage.googleapis.com/v1beta", defaultModel: "gemini-2.5-pro", keyUrl: "https://aistudio.google.com/apikey", keyHost: "aistudio.google.com",
       models: [["gemini-2.5-flash", "gemini-2.5-flash"], ["gemini-2.5-pro", "gemini-2.5-pro"]],
       keyNote: "Google AI Studio keys have a free tier." },
     { id: "mistral", label: "Mistral", short: "Mistral", api: "openai", group: "cloud", chunk: CHUNK.medium,
-      base: "https://api.mistral.ai/v1", defaultModel: "mistral-small-latest", keyUrl: "https://console.mistral.ai/api-keys", keyHost: "console.mistral.ai",
+      base: "https://api.mistral.ai/v1", defaultModel: "mistral-large-latest", keyUrl: "https://console.mistral.ai/api-keys", keyHost: "console.mistral.ai",
       models: [["mistral-small-latest", "mistral-small-latest"], ["mistral-large-latest", "mistral-large-latest"]] },
     { id: "groq", label: "Groq", short: "Groq", api: "openai", group: "cloud", chunk: CHUNK.medium,
       base: "https://api.groq.com/openai/v1", defaultModel: "llama-3.3-70b-versatile", keyUrl: "https://console.groq.com/keys", keyHost: "console.groq.com",
@@ -77,11 +77,11 @@
       base: "https://openrouter.ai/api/v1", defaultModel: "openrouter/auto", keyUrl: "https://openrouter.ai/keys", keyHost: "openrouter.ai",
       models: [["openrouter/auto", "openrouter/auto (picks a model for you)"]], keyNote: "One key reaches hundreds of models, some free." , allModels: true },
     { id: "xai", label: "Grok (xAI)", short: "Grok", api: "openai", group: "cloud", chunk: CHUNK.medium,
-      base: "https://api.x.ai/v1", defaultModel: "grok-3-mini", keyUrl: "https://console.x.ai", keyHost: "console.x.ai",
-      models: [["grok-3-mini", "grok-3-mini"]] },
+      base: "https://api.x.ai/v1", defaultModel: "grok-3", keyUrl: "https://console.x.ai", keyHost: "console.x.ai",
+      models: [["grok-3", "grok-3"], ["grok-3-mini", "grok-3-mini"]] },
     { id: "deepseek", label: "DeepSeek", short: "DeepSeek", api: "openai", group: "cloud", chunk: CHUNK.medium,
       base: "https://api.deepseek.com", defaultModel: "deepseek-chat", keyUrl: "https://platform.deepseek.com/api_keys", keyHost: "platform.deepseek.com",
-      models: [["deepseek-chat", "deepseek-chat"]] },
+      models: [["deepseek-chat", "deepseek-chat"], ["deepseek-reasoner", "deepseek-reasoner"]] },
     { id: "custom", label: "Other (OpenAI-compatible address)", short: "Custom", api: "openai", group: "cloud", chunk: CHUNK.small,
       needsUrl: true, keyOptional: true, defaultModel: "", models: [], allModels: true,
       keyNote: "Any server that speaks the OpenAI chat format, e.g. LM Studio (http://localhost:1234/v1) or a company gateway. The key can be left empty." },
@@ -326,6 +326,49 @@
 
   const ASK = { anthropic: askAnthropic, openai: askOpenAI, gemini: askGemini, ollama: askOllama };
 
+  // ---------- ranking models for factual reliability ----------
+  // A rule of thumb, not a benchmark: bigger, newer models generally know more facts and make
+  // up fewer of them. Small/"mini"/"lite" variants, previews and dated snapshots rank lower.
+  const RANK = {
+    top: /opus|fable|mythos|ultra|405b|reasoner|large|-pro(?![a-z])|gpt-5(?!.*(mini|nano))|(^|[^a-z0-9])o[134](?!.*mini)(?![a-z0-9.])|grok-4|(^|[^a-z0-9])r1(?![a-z0-9])/,
+    mid: /sonnet|gpt-4o|gpt-4\.1|gpt-4-turbo|flash|70b|72b|65b|medium|grok|deepseek-chat|deepseek-v3|command-r-plus|qwen/,
+    small: /(^|[^a-z])mini(?![a-z])|ministral|nano|lite|small|haiku|instant|tiny|(^|[^0-9.])([1-9]|1[0-4])b(?![a-z0-9])/,
+    unstable: /preview|experimental|(^|[^a-z])exp(?![a-z])|beta/,
+    specialised: /codex|coder|vision|audio|embed|guard/,
+    snapshot: /-\d{4}-\d{2}-\d{2}|-\d{8}|-\d{4}$/,
+  };
+
+  function scoreModel(id) {
+    const s = String(id).toLowerCase();
+    let score = 0;
+    if (RANK.top.test(s)) score += 40;
+    else if (RANK.mid.test(s)) score += 25;
+    if (/fable|mythos/.test(s)) score += 5;
+    if (RANK.small.test(s)) score -= 25;
+    if (RANK.unstable.test(s)) score -= 10;
+    if (RANK.specialised.test(s)) score -= 15;
+    if (RANK.snapshot.test(s)) score -= 5;
+    const v = /(\d+)(?:[.-](\d)(?!\d))?/.exec(s.replace(/^.*\//, ""));
+    if (v) score += Math.min(Number(v[1]) + (v[2] ? Number(v[2]) / 10 : 0), 10) * 4;
+    return score;
+  }
+
+  const RECOMMENDED_MIN = 35;
+
+  // Sort best first. The first few that clear the bar are flagged `recommended`.
+  function rankModels(models) {
+    const ranked = models
+      .map((m, i) => ({ id: m.id, name: m.name, score: scoreModel(m.id), i }))
+      .sort((a, b) => b.score - a.score || a.i - b.i);
+    let rec = 0;
+    for (const m of ranked) {
+      m.recommended = m.score >= RECOMMENDED_MIN && rec < 3;
+      if (m.recommended) rec++;
+      delete m.i;
+    }
+    return ranked;
+  }
+
   // ---------- listing the models a key can use ----------
   const NOT_CHAT = /embed|whisper|tts|dall-e|moderation|audio|realtime|transcribe|davinci|babbage|guard|image|ocr|rerank/i;
 
@@ -387,6 +430,6 @@
 
   root.FactCore = {
     SYSTEM_PROMPT, SCHEMA, FREE_MODEL, DEFAULT_ANTHROPIC_MODEL, DEFAULT_OLLAMA_URL, CHUNK, PROVIDERS,
-    providerById, engineFor, splitChunks, locateClaims, parseClaims, checkText, listModels,
+    providerById, engineFor, splitChunks, locateClaims, parseClaims, checkText, listModels, scoreModel, rankModels,
   };
 })(typeof window !== "undefined" ? window : globalThis);

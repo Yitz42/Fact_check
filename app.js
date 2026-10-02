@@ -18,7 +18,7 @@
   const keyEl = $("key");
   const rememberEl = $("remember");
   const modelEl = $("model");
-  const modelListEl = $("model-list");
+  const modelMenuEl = $("model-menu");
   const providerEl = $("provider");
   const providerNoteEl = $("provider-note");
   const panelKeyEl = $("panel-key");
@@ -48,11 +48,12 @@
 
   // ---------- engine settings (behind the button in the top bar) ----------
   const P = Core.providerById;
-  const cfg = { provider: "free", models: {}, urls: {} };
+  const cfg = { provider: "free", models: {}, urls: {}, recent: {} };
   try { Object.assign(cfg, JSON.parse(store.get("localStorage", "fc_cfg") || "{}")); } catch (_) { /* start fresh */ }
   if (!Core.PROVIDERS.some((p) => p.id === cfg.provider)) cfg.provider = "free";
   cfg.models = cfg.models || {};
   cfg.urls = cfg.urls || {};
+  cfg.recent = cfg.recent || {};
   const saveCfg = () => store.set("localStorage", "fc_cfg", JSON.stringify(cfg));
 
   // Keys live in memory per provider; each is saved under its own storage key.
@@ -85,15 +86,83 @@
     }
   }
 
-  function fillModelList(p) {
-    const list = loadedModels[p.id] || (p.models || []).map(([id, name]) => ({ id, name }));
-    modelListEl.replaceChildren();
-    for (const m of list) {
-      const opt = document.createElement("option");
-      opt.value = m.id;
-      if (m.name !== m.id) opt.label = m.name;
-      modelListEl.append(opt);
+  // Most recently used models for a provider, newest first (kept on this device only).
+  const recentOf = (id) => cfg.recent[id] || [];
+  function pushRecent(id, model) {
+    if (!model) return;
+    cfg.recent[id] = [model].concat(recentOf(id).filter((m) => m !== model)).slice(0, 4);
+    saveCfg();
+  }
+
+  const modelChoices = (p) => loadedModels[p.id] || (p.models || []).map(([id, name]) => ({ id, name }));
+
+  // The model list: recently used, then recommended for accuracy, then the rest.
+  // `filter` narrows it while the user types in the box.
+  function renderModelMenu(p, filter) {
+    const q = (filter || "").trim().toLowerCase();
+    const selected = cfg.models[p.id] || p.defaultModel || "";
+    const ranked = Core.rankModels(modelChoices(p));
+    const byId = new Map(ranked.map((m) => [m.id, m]));
+    const matches = (m) => !q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q);
+    const recent = recentOf(p.id).map((id) => byId.get(id) || { id, name: id }).filter(matches);
+    const seen = new Set(recent.map((m) => m.id));
+    const recommended = ranked.filter((m) => m.recommended && !seen.has(m.id) && matches(m));
+    recommended.forEach((m) => seen.add(m.id));
+    const rest = ranked.filter((m) => !seen.has(m.id) && matches(m));
+
+    modelMenuEl.replaceChildren();
+    const section = (title, items, badge) => {
+      if (!items.length) return;
+      const head = document.createElement("div");
+      head.className = "menu-head";
+      head.textContent = title;
+      modelMenuEl.append(head);
+      for (const m of items) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "menu-item";
+        row.setAttribute("role", "option");
+        row.setAttribute("aria-selected", String(m.id === selected));
+        const tick = document.createElement("span");
+        tick.className = "tick";
+        tick.textContent = m.id === selected ? "✓" : "";
+        const label = document.createElement("span");
+        label.className = "label";
+        label.textContent = m.name;
+        if (m.name !== m.id && !m.name.includes(m.id)) {
+          const id = document.createElement("span");
+          id.className = "id";
+          id.textContent = `  ${m.id}`;
+          label.append(id);
+        }
+        row.append(tick, label);
+        if (badge) {
+          const b = document.createElement("span");
+          b.className = "badge";
+          b.textContent = badge;
+          row.append(b);
+        }
+        row.addEventListener("click", () => chooseModel(p, m.id));
+        modelMenuEl.append(row);
+      }
+    };
+    section("Recently used", recent);
+    section("Recommended for accuracy", recommended, "Recommended");
+    section(q ? "Matches" : "All models", rest);
+    if (!modelMenuEl.children.length) {
+      const empty = document.createElement("div");
+      empty.className = "menu-empty";
+      empty.textContent = q ? "No match. The name you typed will be used as is." : "No models yet. Click “Load my models”.";
+      modelMenuEl.append(empty);
     }
+  }
+
+  function chooseModel(p, id) {
+    cfg.models[p.id] = id;
+    modelEl.value = id;
+    saveCfg();
+    renderModelMenu(p);
+    refreshEngine();
   }
 
   function fillOllamaModels(models, selected) {
@@ -105,13 +174,16 @@
       ollamaModelEl.append(opt);
       return;
     }
-    for (const id of models.some((m) => m === selected) || !selected ? models : models.concat(selected)) {
+    const ranked = Core.rankModels(models.map((id) => ({ id, name: id }))).map((m) => m.id);
+    const recents = recentOf("ollama").filter((id) => ranked.includes(id));
+    const ordered = recents.concat(ranked.filter((id) => !recents.includes(id)));
+    for (const id of ordered.includes(selected) || !selected ? ordered : ordered.concat(selected)) {
       const opt = document.createElement("option");
       opt.value = id;
       opt.textContent = id;
       ollamaModelEl.append(opt);
     }
-    ollamaModelEl.value = selected && [...ollamaModelEl.options].some((o) => o.value === selected) ? selected : models[0];
+    ollamaModelEl.value = selected && [...ollamaModelEl.options].some((o) => o.value === selected) ? selected : ordered[0];
   }
 
   // The engine actually used: the chosen provider if it's usable (key entered / model chosen),
@@ -157,7 +229,7 @@
     rememberEl.checked = remembered(p.id);
     modelEl.value = cfg.models[p.id] || p.defaultModel || "";
     modelEl.placeholder = p.defaultModel || "Model name";
-    fillModelList(p);
+    renderModelMenu(p);
     keyHintEl.replaceChildren();
     if (p.keyUrl) {
       keyHintEl.append("Get a key at ");
@@ -200,7 +272,12 @@
   });
   keyEl.addEventListener("input", saveKey);
   rememberEl.addEventListener("change", saveKey);
-  modelEl.addEventListener("input", () => { cfg.models[cfg.provider] = modelEl.value.trim(); saveCfg(); refreshEngine(); });
+  modelEl.addEventListener("input", () => {
+    cfg.models[cfg.provider] = modelEl.value.trim();
+    saveCfg();
+    renderModelMenu(P(cfg.provider), modelEl.value);
+    refreshEngine();
+  });
   customUrlEl.addEventListener("input", () => { cfg.urls[cfg.provider] = customUrlEl.value.trim(); saveCfg(); refreshEngine(); });
   ollamaUrlEl.addEventListener("change", () => {
     cfg.urls.ollama = ollamaUrlEl.value.trim() || Core.DEFAULT_OLLAMA_URL;
@@ -223,15 +300,15 @@
       const models = await Core.listModels(p.id, { key: keyEl.value.trim(), base: (cfg.urls[p.id] || "").trim() });
       if (!models.length) throw new Error("No models were returned for this key.");
       loadedModels[p.id] = models;
-      fillModelList(p);
-      // If the starting default isn't offered to this key, move to one that is.
+      // If the starting default isn't offered to this key, move to the best-ranked model that is.
       if (!cfg.models[p.id] && !models.some((m) => m.id === p.defaultModel)) {
-        cfg.models[p.id] = models[0].id;
-        modelEl.value = models[0].id;
+        cfg.models[p.id] = Core.rankModels(models)[0].id;
+        modelEl.value = cfg.models[p.id];
         saveCfg();
       }
+      renderModelMenu(p);
       refreshEngine();
-      setSettingsStatus(`${models.length} models available. Click the Model box to choose one.`);
+      setSettingsStatus(`${models.length} models available. Pick one from the list.`);
     } catch (err) {
       setSettingsStatus(err.message, true);
     } finally {
@@ -431,6 +508,7 @@
     try {
       const result = await Core.checkText(text, engine, (i, n) => setStatus(`Checking part ${i} of ${n} with ${engine.label}…`));
       doc.claims = result.claims;
+      if (engine.id !== "free") pushRecent(engine.id, engine.model);
       doc.unplaced = result.unplaced;
       const notes = [`Checked with ${engine.label}.`];
       if (cfg.provider !== "free" && engine.id === "free") notes.push("(Your chosen AI isn't set up yet, so the free model was used.)");

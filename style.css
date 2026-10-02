@@ -223,6 +223,7 @@ mark.false-claim:hover, mark.false-claim.active { background: var(--red); color:
 dialog {
   width: min(520px, calc(100vw - 24px));
   max-height: calc(100vh - 24px);
+  overflow-y: auto;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: 20px;
@@ -268,3 +269,19 @@ input[type="password"], input[type="text"], select {
   .actions { width: 100%; }
   .actions .ghost { flex: 1; justify-content: center; }
 }
+
+/* ---------- model list ---------- */
+.menu { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); padding: 4px; }
+.menu-head { padding: 8px 10px 4px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.menu-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 10px; border: 0; border-radius: 8px; background: transparent;
+  color: var(--fg); font: inherit; font-size: 0.9rem; text-align: left; cursor: pointer;
+}
+.menu-item:hover { background: var(--accent-soft); }
+.menu-item[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.menu-item .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-item .id { color: var(--muted); font-size: 0.78rem; font-weight: 400; }
+.menu-item .tick { width: 16px; flex: none; color: var(--accent); }
+.badge { flex: none; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 0.68rem; font-weight: 700; }
+.menu-empty { padding: 12px 10px; color: var(--muted); font-size: 0.85rem; }

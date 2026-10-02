@@ -34,8 +34,11 @@ then visit http://127.0.0.1:8000. To use it on a phone, put the folder on any st
 | **Other** | any OpenAI-compatible address (LM Studio, a company gateway, ...), key optional | That server |
 | **Ollama** (optional, private) | install [Ollama](https://ollama.com), `ollama pull llama3.1`, run `OLLAMA_ORIGINS=* ollama serve`, then "Detect models" | Stays on your computer |
 
-Each cloud provider has its own key box, model box (type a name or "Load my models" to list
-what your key can use) and "Remember key on this device" option. Keys are sent only to that
+Each cloud provider has its own key box, model list and "Remember key on this device" option.
+The model list shows your recently used models first, then "Recommended for accuracy", then
+the rest ("Load my models" fetches what your key can use; you can also type a name). The
+ranking is a rule of thumb, not a benchmark: bigger, newer models tend to get facts right more
+often, while mini/lite/small variants, previews and dated snapshots rank lower. Keys are sent only to that
 provider and are kept for the browser session unless you tick Remember. With no key entered,
 the free model is used automatically.
 
