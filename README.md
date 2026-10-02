@@ -1,45 +1,56 @@
 # Fact Check
 
-Paste text in. Claude finds statements that are factually false and highlights them in
-**red**, in place. Click a highlight to see a bubble with the corrected fact.
+Paste text or upload files. Claims that are factually false are underlined in **red**,
+in place. Click one to see a bubble with the corrected fact.
 
-Your text is never modified. Claude only returns short quotes; the server finds each quote
-verbatim in your original text (quotes it can't find are dropped, never guessed), and the
-page renders your exact text with highlights drawn over it. The page also asserts that the
-rendered text equals your input before showing it.
+**Your text is never changed.** The AI only returns short quotes; the page finds each quote
+verbatim in your original text (quotes it can't find are dropped, never guessed) and draws
+highlights over your exact text. It also asserts that the displayed text equals your input.
+
+It's a small static site (no server, no install, no build): `index.html`, `style.css`,
+`core.js`, `app.js`. It works on computers and phones. The AI is called straight from the
+browser.
 
 ## Run
 
-Needs only Python 3 (no packages to install) and an Anthropic API key.
+Open `index.html`, or serve the folder:
 
 ```bash
-python3 server.py
+python3 -m http.server 8000
 ```
 
-Open http://127.0.0.1:8000, then:
+then visit http://127.0.0.1:8000. To use it on a phone, put the folder on any static host
+(GitHub Pages, Netlify, ...).
 
-1. **Paste your API key** at the top. It must be an API key from
-   [console.anthropic.com](https://console.anthropic.com) (a Claude.ai or Claude Code login
-   can't be used by other apps). The key is sent only to the local server and on to
-   Anthropic. It is kept for the browser session, or on this device if you tick
-   "Remember key". Alternatively put `ANTHROPIC_API_KEY=...` in a `.env` file
-   (see `.env.example`) and leave the field empty.
-2. **Pick a model.** The list has common models; "Load my models" fetches exactly what your
-   key can use.
-3. **Paste text or upload files** (button or drag and drop): `.txt .md .csv .json .html .pdf .docx`.
-   Several files open as tabs. PDF and Word text is read in your browser (the readers load
-   from cdnjs, so that part needs internet). Scanned PDFs and images have no text to read.
-4. Click **Fact-check**.
+## Choose the AI (button in the top bar)
+
+| Engine | Setup | Where your text goes |
+|---|---|---|
+| **Free** (default) | none | GPT-OSS 20B on Pollinations.ai. Less accurate; not for sensitive documents. |
+| **Claude** | paste an API key from [console.anthropic.com](https://console.anthropic.com) and pick a model ("Load my models" lists what your key can use) | Straight to Anthropic. Key is kept for the session, or on the device if you tick "Remember". |
+| **Local** (optional) | install [Ollama](https://ollama.com), `ollama pull llama3.1`, run `OLLAMA_ORIGINS=* ollama serve`, then "Detect models" | Stays on your computer. |
+
+With no key entered, the free model is used automatically. A Claude.ai or Claude Code
+login can't be used by other apps; it must be an API key.
+
+## Files
+
+`.txt .md .csv .json .html .pdf .docx` via the Upload button or drag and drop. Several files
+open as tabs. PDF/Word text is read in your browser (the readers load from cdnjs, so that
+needs internet). Scanned PDFs and images have no text to read.
+
+Long documents are checked in pieces, so size is limited only by the AI service's speed
+(200,000 characters per document).
 
 ## Test
 
-```bash
-python3 -m unittest
-```
+Open `tests.html` in a browser (served as above). The tab title says `ALL n PASSED`.
 
 ## Limits
 
-- Claude judges from its own training knowledge, with no web lookup, so it can miss very
-  recent events or occasionally flag something wrongly. Treat flags as prompts to verify.
-- Text is limited to 200,000 characters per document.
-- Highlights sit on the extracted text. For PDF/Word/HTML that is the text the page read from the file, not the original layout.
+- The AI judges from its own training knowledge, with no web lookup. It can miss very recent
+  events or flag things wrongly, and the free model is weaker than Claude. Treat flags as
+  prompts to verify.
+- Highlights sit on the text the page extracted. For PDF/Word/HTML that isn't the original layout.
+- Browsers can block a hosted https page from reaching `http://localhost` Ollama (Safari does).
+  Chrome and Firefox allow it.

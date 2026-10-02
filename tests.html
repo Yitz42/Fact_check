@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fact Check tests</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, Menlo, monospace; padding: 16px; }
+  .pass { color: #16a34a; } .fail { color: #dc2626; font-weight: 700; }
+</style>
+</head>
+<body>
+<h1>Fact Check tests</h1>
+<pre id="out"></pre>
+<script src="core.js"></script>
+<script>
+(async () => {
+  const C = window.FactCore;
+  const out = document.getElementById("out");
+  let failed = 0, total = 0;
+  const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  async function test(name, fn) {
+    total++;
+    try { await fn(); out.insertAdjacentHTML("beforeend", `<span class="pass">PASS</span> ${name}\n`); }
+    catch (e) { failed++; out.insertAdjacentHTML("beforeend", `<span class="fail">FAIL</span> ${name}: ${e.message}\n`); }
+  }
+  const ok = (cond, msg) => { if (!cond) throw new Error(msg || "assertion failed"); };
+
+  await test("locate: exact quote maps back to the original text", () => {
+    const text = "Paris is the capital of Germany. Water boils at 100C.";
+    const { located, dropped } = C.locateClaims(text, [{ quote: "capital of Germany", correction: "France" }]);
+    ok(dropped === 0 && text.slice(located[0].start, located[0].end) === "capital of Germany");
+  });
+  await test("locate: unfound and empty quotes are dropped, never guessed", () => {
+    const r = C.locateClaims("Hello world", [{ quote: "Goodbye" }, { quote: "" }]);
+    ok(r.located.length === 0 && r.dropped === 2);
+  });
+  await test("locate: duplicate quotes map to distinct spans", () => {
+    const r = C.locateClaims("It is 5 miles. Really, it is 5 miles.", [{ quote: "it is 5 miles" }, { quote: "It is 5 miles" }]);
+    ok(eq(r.located.map((c) => [c.start, c.end]), [[0, 13], [23, 36]]), JSON.stringify(r.located));
+  });
+  await test("locate: tolerates whitespace and curly-vs-straight quotes", () => {
+    const text = "The sun orbits\nthe Earth. She said “hello” and it’s fine.";
+    const r = C.locateClaims(text, [{ quote: "sun orbits the Earth" }, { quote: 'said "hello" and it\'s fine' }]);
+    ok(r.located.length === 2 && r.dropped === 0, JSON.stringify(r));
+    ok(text.slice(r.located[0].start, r.located[0].end) === "sun orbits\nthe Earth");
+  });
+  await test("locate: regex characters in quotes are literal", () => {
+    const text = "Is it (really) 2+2=5? Yes.";
+    const r = C.locateClaims(text, [{ quote: "(really) 2+2=5?" }]);
+    ok(r.located.length === 1 && text.slice(r.located[0].start, r.located[0].end) === "(really) 2+2=5?");
+  });
+  await test("locate: offset is added for chunked checks", () => {
+    const r = C.locateClaims("abc def", [{ quote: "def" }], 100);
+    ok(r.located[0].start === 104 && r.located[0].end === 107);
+  });
+  await test("parse: plain JSON, fenced JSON, and JSON inside prose", () => {
+    const body = '{"claims":[{"quote":"a","correction":"b","explanation":"c"}]}';
+    ok(C.parseClaims(body).length === 1);
+    ok(C.parseClaims("```json\n" + body + "\n```").length === 1);
+    ok(C.parseClaims("Here you go: " + body + " Hope that helps").length === 1);
+    ok(C.parseClaims('{"claims":[]}').length === 0);
+  });
+  await test("parse: garbage throws a friendly error", () => {
+    let threw = false;
+    try { C.parseClaims("no json here"); } catch (e) { threw = /expected format/.test(e.message); }
+    ok(threw);
+  });
+  await test("chunks: tile the text exactly, respect the size limit", () => {
+    const text = ("Sentence number one. ".repeat(40) + "\n\n").repeat(6);
+    const chunks = C.splitChunks(text, 1000);
+    ok(chunks[0].start === 0 && chunks[chunks.length - 1].end === text.length);
+    ok(chunks.every((c, i) => c.end - c.start <= 1000 && (i === 0 || c.start === chunks[i - 1].end)));
+    ok(chunks.length > 1);
+  });
+  await test("chunks: never split an emoji surrogate pair", () => {
+    const text = "😀".repeat(100);
+    const chunks = C.splitChunks(text, 11);
+    ok(chunks.every((c) => text.slice(c.start, c.end).length % 2 === 0));
+  });
+
+  // ---- request shapes, with fetch stubbed ----
+  const realFetch = window.fetch;
+  function stubFetch(handler) {
+    const calls = [];
+    window.fetch = async (url, opts) => {
+      const body = opts && opts.body ? JSON.parse(opts.body) : null;
+      calls.push({ url, headers: Object.assign({}, opts && opts.headers), body });
+      const res = handler(url, body, calls.length);
+      return { ok: res.status === undefined, status: res.status || 200, json: async () => res.json };
+    };
+    return calls;
+  }
+  const claimJson = (quote) => JSON.stringify({ claims: [{ quote, correction: "fixed", explanation: "because" }] });
+
+  await test("anthropic: direct-browser request, structured output, no forced tool_choice", async () => {
+    const calls = stubFetch(() => ({ json: { stop_reason: "end_turn", content: [{ type: "text", text: claimJson("Germany") }] } }));
+    const r = await C.checkText("Paris is in Germany.", { kind: "anthropic", key: "sk-ant-x", model: "claude-opus-5-5" });
+    const c = calls[0];
+    ok(c.url === "https://api.anthropic.com/v1/messages");
+    ok(c.headers["x-api-key"] === "sk-ant-x" && c.headers["anthropic-dangerous-direct-browser-access"] === "true");
+    ok(c.body.model === "claude-opus-5-5" && !("tool_choice" in c.body));
+    ok(c.body.output_config.format.type === "json_schema");
+    ok(r.claims.length === 1 && r.claims[0].start === 12);
+  });
+  await test("anthropic: retries without output_config if the model rejects it", async () => {
+    const calls = stubFetch((url, body, n) => n === 1
+      ? { status: 400, json: { error: { message: "output_config.format is not supported for this model" } } }
+      : { json: { stop_reason: "end_turn", content: [{ type: "text", text: claimJson("Germany") }] } });
+    const r = await C.checkText("Paris is in Germany.", { kind: "anthropic", key: "k", model: "claude-old" });
+    ok(calls.length === 2 && !("output_config" in calls[1].body) && r.claims.length === 1);
+  });
+  await test("anthropic: bad key surfaces a clear message", async () => {
+    stubFetch(() => ({ status: 401, json: { error: { message: "invalid x-api-key" } } }));
+    let msg = "";
+    try { await C.checkText("hi there", { kind: "anthropic", key: "bad" }); } catch (e) { msg = e.message; }
+    ok(/key was rejected/.test(msg), msg);
+  });
+  await test("free: keyless request to the free endpoint, no key header", async () => {
+    const calls = stubFetch(() => ({ json: { choices: [{ message: { content: claimJson("Germany") } }] } }));
+    const r = await C.checkText("Paris is in Germany.", { kind: "free" });
+    ok(calls[0].url === "https://text.pollinations.ai/openai");
+    ok(!("x-api-key" in calls[0].headers) && calls[0].body.model === C.FREE_MODEL);
+    ok(r.claims.length === 1);
+  });
+  await test("ollama: posts to the local address with a JSON schema", async () => {
+    const calls = stubFetch(() => ({ json: { message: { content: claimJson("Germany") } } }));
+    const r = await C.checkText("Paris is in Germany.", { kind: "ollama", url: "http://localhost:11434/", model: "llama3.1" });
+    ok(calls[0].url === "http://localhost:11434/api/chat" && calls[0].body.model === "llama3.1");
+    ok(calls[0].body.stream === false && calls[0].body.format.type === "object" && r.claims.length === 1);
+  });
+  await test("long text is checked in pieces and offsets line up with the whole text", async () => {
+    const filler = "This is a perfectly true sentence about nothing. ".repeat(300);
+    const text = filler + "The Moon is made of cheese. " + filler;
+    let parts = 0;
+    stubFetch((url, body) => {
+      parts++;
+      const has = body.messages[1].content.includes("made of cheese");
+      return { json: { choices: [{ message: { content: has ? claimJson("made of cheese") : '{"claims":[]}' } }] } };
+    });
+    const r = await C.checkText(text, { kind: "free" });
+    ok(parts > 1, "expected several parts, got " + parts);
+    ok(r.claims.length === 1 && text.slice(r.claims[0].start, r.claims[0].end) === "made of cheese");
+  });
+  await test("one failed part doesn't lose the others; all failing throws", async () => {
+    const text = ("Filler sentence here. ".repeat(500)) + "The Moon is made of cheese.";
+    stubFetch((url, body) => body.messages[1].content.includes("cheese")
+      ? { json: { choices: [{ message: { content: claimJson("made of cheese") } }] } }
+      : { json: { choices: [{ message: { content: "not json" } }] } });
+    const r = await C.checkText(text, { kind: "free" });
+    ok(r.claims.length === 1 && r.failedParts >= 1);
+    stubFetch(() => ({ json: { choices: [{ message: { content: "not json" } }] } }));
+    let threw = false;
+    try { await C.checkText(text, { kind: "free" }); } catch (_) { threw = true; }
+    ok(threw);
+  });
+  window.fetch = realFetch;
+
+  out.insertAdjacentHTML("beforeend", `\n${total - failed}/${total} passed\n`);
+  document.title = failed ? `FAILED ${failed}` : `ALL ${total} PASSED`;
+})();
+</script>
+</body>
+</html>

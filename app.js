@@ -8,95 +8,183 @@
   const bubble = $("bubble");
   const bubbleCorrection = $("bubble-correction");
   const bubbleWhy = $("bubble-why");
-  const keyEl = $("key");
-  const modelEl = $("model");
-  const rememberEl = $("remember");
-  const loadModelsBtn = $("load-models");
   const tabsEl = $("tabs");
   const fileEl = $("file");
   const dropEl = $("drop");
+  const engineBtn = $("engine");
+  const engineLabel = $("engine-label");
+  const dialog = $("settings");
+  const settingsStatus = $("settings-status");
+  const keyEl = $("key");
+  const rememberEl = $("remember");
+  const modelEl = $("model");
+  const ollamaUrlEl = $("ollama-url");
+  const ollamaModelEl = $("ollama-model");
 
+  const Core = window.FactCore;
+  const MAX_CHARS = 200000;
   const MAX_FILE_BYTES = 20 * 1024 * 1024;
-  const FALLBACK_MODELS = [
+  const CLAUDE_MODELS = [
     ["claude-sonnet-5-5", "Claude Sonnet 5.5"],
     ["claude-opus-5-5", "Claude Opus 5.5"],
     ["claude-fable-5-1", "Claude Fable 5.1"],
     ["claude-haiku-4-5", "Claude Haiku 4.5"],
   ];
   const LIBS = {
-    pdf: ["https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"],
-    docx: ["https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"],
+    pdf: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
+    docx: "https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js",
   };
   const PDF_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
   // ---------- storage (every access guarded: it can be blocked or empty) ----------
   const store = {
-    get(area, key) { try { return window[area].getItem(key); } catch { return null; } },
-    set(area, key, value) { try { window[area].setItem(key, value); } catch { /* ignore */ } },
-    del(area, key) { try { window[area].removeItem(key); } catch { /* ignore */ } },
+    get(area, key) { try { return window[area].getItem(key); } catch (_) { return null; } },
+    set(area, key, value) { try { window[area].setItem(key, value); } catch (_) { /* ignore */ } },
+    del(area, key) { try { window[area].removeItem(key); } catch (_) { /* ignore */ } },
   };
 
-  // ---------- settings: key + model ----------
-  function fillModels(models, selected) {
-    modelEl.replaceChildren();
-    for (const [id, name] of models) {
+  // ---------- engine settings (behind the button in the top bar) ----------
+  const settings = {
+    provider: store.get("localStorage", "fc_provider") || "free",
+    claudeModel: store.get("localStorage", "fc_amodel") || Core.DEFAULT_ANTHROPIC_MODEL,
+    ollamaUrl: store.get("localStorage", "fc_ourl") || Core.DEFAULT_OLLAMA_URL,
+    ollamaModel: store.get("localStorage", "fc_omodel") || "",
+  };
+
+  function fillSelect(select, models, selected, emptyText) {
+    select.replaceChildren();
+    if (!models.length) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = emptyText || "No models";
+      select.append(opt);
+      return;
+    }
+    const list = models.slice();
+    if (selected && !list.some(([id]) => id === selected)) list.push([selected, selected]);
+    for (const [id, name] of list) {
       const opt = document.createElement("option");
       opt.value = id;
       opt.textContent = name;
       opt.title = id;
-      modelEl.append(opt);
+      select.append(opt);
     }
-    if (selected && !models.some(([id]) => id === selected)) {
-      const opt = document.createElement("option");
-      opt.value = selected;
-      opt.textContent = selected;
-      modelEl.append(opt);
-    }
-    if (selected) modelEl.value = selected;
+    select.value = selected && list.some(([id]) => id === selected) ? selected : list[0][0];
   }
 
   function saveKey() {
     store.del("localStorage", "fc_key");
     store.del("sessionStorage", "fc_key");
-    if (!keyEl.value) return;
-    store.set(rememberEl.checked ? "localStorage" : "sessionStorage", "fc_key", keyEl.value);
+    if (keyEl.value) store.set(rememberEl.checked ? "localStorage" : "sessionStorage", "fc_key", keyEl.value);
+    refreshEngine();
+  }
+
+  // The engine actually used: Claude only with a key, Ollama only once a model is chosen,
+  // otherwise the free model.
+  function currentEngine() {
+    const key = keyEl.value.trim();
+    if (settings.provider === "anthropic" && key) {
+      const name = modelEl.options[modelEl.selectedIndex];
+      return { kind: "anthropic", key, model: modelEl.value || settings.claudeModel, label: name ? name.textContent : settings.claudeModel };
+    }
+    if (settings.provider === "ollama" && settings.ollamaModel) {
+      return { kind: "ollama", url: settings.ollamaUrl, model: settings.ollamaModel, label: `${settings.ollamaModel} (on your computer)` };
+    }
+    return { kind: "free", label: "Free model" };
+  }
+
+  function refreshEngine() {
+    const engine = currentEngine();
+    engineLabel.textContent = engine.label;
+    engineBtn.dataset.kind = engine.kind;
+    document.querySelectorAll(".seg [data-provider]").forEach((b) => {
+      b.setAttribute("aria-checked", String(b.dataset.provider === settings.provider));
+    });
+    document.querySelectorAll("[data-panel]").forEach((p) => { p.hidden = p.dataset.panel !== settings.provider; });
+  }
+
+  function setSettingsStatus(message, isError) {
+    settingsStatus.textContent = message;
+    settingsStatus.classList.toggle("error", Boolean(isError));
   }
 
   keyEl.value = store.get("localStorage", "fc_key") || store.get("sessionStorage", "fc_key") || "";
   rememberEl.checked = Boolean(store.get("localStorage", "fc_key"));
-  fillModels(FALLBACK_MODELS, store.get("localStorage", "fc_model") || FALLBACK_MODELS[0][0]);
+  fillSelect(modelEl, CLAUDE_MODELS, settings.claudeModel);
+  fillSelect(ollamaModelEl, settings.ollamaModel ? [[settings.ollamaModel, settings.ollamaModel]] : [], settings.ollamaModel, "Click “Detect models”");
+  ollamaUrlEl.value = settings.ollamaUrl;
+  refreshEngine();
+
+  engineBtn.addEventListener("click", () => { setSettingsStatus(""); dialog.showModal(); });
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+  document.querySelectorAll(".seg [data-provider]").forEach((b) => b.addEventListener("click", () => {
+    settings.provider = b.dataset.provider;
+    store.set("localStorage", "fc_provider", settings.provider);
+    setSettingsStatus("");
+    refreshEngine();
+  }));
   keyEl.addEventListener("input", saveKey);
   rememberEl.addEventListener("change", saveKey);
-  modelEl.addEventListener("change", () => store.set("localStorage", "fc_model", modelEl.value));
+  modelEl.addEventListener("change", () => {
+    settings.claudeModel = modelEl.value;
+    store.set("localStorage", "fc_amodel", modelEl.value);
+    refreshEngine();
+  });
+  ollamaUrlEl.addEventListener("change", () => {
+    settings.ollamaUrl = ollamaUrlEl.value.trim() || Core.DEFAULT_OLLAMA_URL;
+    store.set("localStorage", "fc_ourl", settings.ollamaUrl);
+  });
+  ollamaModelEl.addEventListener("change", () => {
+    settings.ollamaModel = ollamaModelEl.value;
+    store.set("localStorage", "fc_omodel", settings.ollamaModel);
+    refreshEngine();
+  });
+
+  $("load-models").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    if (!keyEl.value.trim()) return setSettingsStatus("Enter your API key first.", true);
+    btn.disabled = true;
+    setSettingsStatus("Loading models…");
+    try {
+      const models = await Core.listAnthropicModels(keyEl.value.trim());
+      if (!models.length) throw new Error("No Claude models were returned for this key.");
+      fillSelect(modelEl, models.map((m) => [m.id, m.name]), modelEl.value);
+      settings.claudeModel = modelEl.value;
+      store.set("localStorage", "fc_amodel", modelEl.value);
+      refreshEngine();
+      setSettingsStatus(`${models.length} models available.`);
+    } catch (err) {
+      setSettingsStatus(err.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $("detect-ollama").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    settings.ollamaUrl = ollamaUrlEl.value.trim() || Core.DEFAULT_OLLAMA_URL;
+    store.set("localStorage", "fc_ourl", settings.ollamaUrl);
+    btn.disabled = true;
+    setSettingsStatus("Looking for Ollama…");
+    try {
+      const models = await Core.listOllamaModels(settings.ollamaUrl);
+      if (!models.length) throw new Error("Ollama is running but has no models. Run: ollama pull llama3.1");
+      fillSelect(ollamaModelEl, models.map((m) => [m.id, m.name]), settings.ollamaModel);
+      settings.ollamaModel = ollamaModelEl.value;
+      store.set("localStorage", "fc_omodel", settings.ollamaModel);
+      refreshEngine();
+      setSettingsStatus(`Found ${models.length} model${models.length === 1 ? "" : "s"} on your computer.`);
+    } catch (err) {
+      setSettingsStatus(err.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   function setStatus(message, isError) {
     statusEl.textContent = message;
     statusEl.classList.toggle("error", Boolean(isError));
   }
-
-  function authHeaders() {
-    const headers = { "Content-Type": "application/json" };
-    if (keyEl.value.trim()) headers["X-Api-Key"] = keyEl.value.trim();
-    return headers;
-  }
-
-  loadModelsBtn.addEventListener("click", async () => {
-    loadModelsBtn.disabled = true;
-    setStatus("Loading models…");
-    try {
-      const res = await fetch("/api/models", { headers: authHeaders() });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not load models.");
-      if (!data.models.length) throw new Error("No Claude models were returned for this key.");
-      fillModels(data.models.map((m) => [m.id, m.name]), modelEl.value);
-      store.set("localStorage", "fc_model", modelEl.value);
-      setStatus(`${data.models.length} models available.`);
-    } catch (err) {
-      setStatus(err.message, true);
-    } finally {
-      loadModelsBtn.disabled = false;
-    }
-  });
 
   // ---------- documents (pasted text or uploaded files), one tab each ----------
   let docs = [];
@@ -104,7 +192,7 @@
   let nextId = 1;
 
   function newDoc(name, text) {
-    docs.push({ id: nextId++, name, text, claims: null, unplaced: 0 });
+    docs.push({ id: nextId++, name, text, claims: null, unplaced: 0, note: "" });
     active = docs.length - 1;
   }
   newDoc("Pasted text", "");
@@ -172,6 +260,7 @@
       const n = doc.claims.length;
       let message = n === 0 ? "No false claims found." : `${n} false claim${n === 1 ? "" : "s"} found. Click a red highlight.`;
       if (doc.unplaced) message += ` (${doc.unplaced} couldn't be located in the text.)`;
+      if (doc.note) message += ` ${doc.note}`;
       setStatus(message);
     } else {
       input.value = doc.text;
@@ -256,18 +345,18 @@
     const doc = current();
     const text = doc.text;
     if (!text.trim()) return setStatus("Paste, type or upload some text first.", true);
+    if (text.length > MAX_CHARS) return setStatus(`Text is too long (max ${MAX_CHARS.toLocaleString()} characters).`, true);
+    const engine = currentEngine();
     checkBtn.disabled = true;
-    setStatus(`Checking with ${modelEl.value}…`);
+    setStatus(`Checking with ${engine.label}…`);
     try {
-      const res = await fetch("/api/check", {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({ text, model: modelEl.value }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Something went wrong.");
-      doc.claims = data.claims;
-      doc.unplaced = data.unplaced;
+      const result = await Core.checkText(text, engine, (i, n) => setStatus(`Checking part ${i} of ${n} with ${engine.label}…`));
+      doc.claims = result.claims;
+      doc.unplaced = result.unplaced;
+      const notes = [`Checked with ${engine.label}.`];
+      if (settings.provider === "anthropic" && engine.kind === "free") notes.push("(No API key set, so the free model was used.)");
+      if (result.failedParts) notes.push(`${result.failedParts} of ${result.parts} parts couldn't be checked.`);
+      doc.note = notes.join(" ");
       if (current() === doc) showDoc(); else renderTabs();
     } catch (err) {
       setStatus(err.message, true);
@@ -278,25 +367,21 @@
 
   checkBtn.addEventListener("click", runCheck);
   editBtn.addEventListener("click", () => {
-    const doc = current();
-    doc.claims = null;
+    current().claims = null;
     showDoc();
     input.focus();
   });
 
   // ---------- file upload: read the text out of the file, in the browser ----------
-  function loadScript(src) {
-    return new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = src;
-      s.onload = resolve;
-      s.onerror = () => reject(new Error("Couldn't load the PDF/Word reader (needs an internet connection)."));
-      document.head.append(s);
-    });
-  }
   const libCache = {};
   function ensureLib(name) {
-    libCache[name] = libCache[name] || Promise.all(LIBS[name].map(loadScript));
+    libCache[name] = libCache[name] || new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = LIBS[name];
+      s.onload = resolve;
+      s.onerror = () => { delete libCache[name]; reject(new Error("Couldn't load the PDF/Word reader (needs an internet connection).")); };
+      document.head.append(s);
+    });
     return libCache[name];
   }
 
@@ -328,8 +413,8 @@
       await ensureLib("docx");
       return (await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() })).value;
     }
-    if (ext === "doc" || ["png", "jpg", "jpeg", "gif", "webp", "xlsx", "pptx", "zip"].includes(ext)) {
-      throw new Error("not supported");
+    if (["doc", "png", "jpg", "jpeg", "gif", "webp", "xlsx", "pptx", "zip"].includes(ext)) {
+      throw new Error("this file type isn't supported");
     }
     const text = await file.text();
     if (ext === "html" || ext === "htm") return new DOMParser().parseFromString(text, "text/html").body.textContent;

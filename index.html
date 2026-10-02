@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#6366f1">
+<title>Fact Check</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
+    <span>Fact Check</span>
+  </div>
+  <button id="engine" class="engine" type="button" aria-haspopup="dialog" title="Choose the AI that checks your text">
+    <span class="dot" aria-hidden="true"></span>
+    <span id="engine-label">Free model</span>
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+  </button>
+</header>
+
+<main>
+  <section class="hero">
+    <h1>Find what's false. Keep every word.</h1>
+    <p>Paste or upload your text. Anything untrue is underlined in red; click it to see the corrected fact. Your text is never edited.</p>
+  </section>
+
+  <section class="editor" aria-label="Text to check">
+    <div class="editor-head">
+      <div id="tabs" class="tabs" role="tablist"></div>
+      <div class="actions">
+        <button id="add-doc" class="ghost" type="button" title="New blank text">+ New</button>
+        <button id="upload" class="ghost" type="button">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>
+          Upload files
+        </button>
+        <input id="file" type="file" multiple hidden accept=".txt,.md,.markdown,.csv,.tsv,.json,.html,.htm,.xml,.log,.pdf,.docx">
+      </div>
+    </div>
+
+    <div id="drop" class="drop">
+      <textarea id="input" placeholder="Paste or type your text here, or drop a file (.txt .md .pdf .docx .html .csv …)" spellcheck="false" autofocus></textarea>
+      <div id="review" class="review" hidden></div>
+    </div>
+
+    <div class="editor-foot">
+      <span id="status" role="status"></span>
+      <button id="edit" class="ghost" type="button" hidden>Edit text</button>
+      <button id="check" class="primary" type="button">Fact-check</button>
+    </div>
+  </section>
+</main>
+
+<dialog id="settings" aria-labelledby="settings-title">
+  <form method="dialog" class="sheet">
+    <div class="sheet-head">
+      <h2 id="settings-title">AI engine</h2>
+      <button class="icon" value="close" aria-label="Close">×</button>
+    </div>
+
+    <div class="seg" role="radiogroup" aria-label="Engine">
+      <button type="button" role="radio" data-provider="free">Free</button>
+      <button type="button" role="radio" data-provider="anthropic">Claude</button>
+      <button type="button" role="radio" data-provider="ollama">Local</button>
+    </div>
+
+    <div class="panel" data-panel="free">
+      <p><strong>No setup, no key.</strong> Runs on a small open model (GPT-OSS 20B) hosted by Pollinations.ai. It's less accurate than Claude, and your text is sent to that service, so don't use it for sensitive documents.</p>
+      <p class="hint">Used automatically whenever no key is entered.</p>
+    </div>
+
+    <div class="panel" data-panel="anthropic" hidden>
+      <label class="field">
+        <span>Anthropic API key</span>
+        <input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="check"><input id="remember" type="checkbox"> Remember key on this device</label>
+      <label class="field">
+        <span>Model</span>
+        <span class="row">
+          <select id="model"></select>
+          <button id="load-models" class="ghost" type="button" title="List the models your key can use">Load my models</button>
+        </span>
+      </label>
+      <p class="hint">Use an API key from console.anthropic.com (a Claude.ai or Claude Code login won't work). It goes straight from this page to Anthropic and is only saved if you tick the box. Without a key, the free model is used.</p>
+    </div>
+
+    <div class="panel" data-panel="ollama" hidden>
+      <label class="field">
+        <span>Ollama address</span>
+        <input id="ollama-url" type="text" placeholder="http://localhost:11434" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="field">
+        <span>Model</span>
+        <span class="row">
+          <select id="ollama-model"></select>
+          <button id="detect-ollama" class="ghost" type="button">Detect models</button>
+        </span>
+      </label>
+      <p class="hint"><strong>Private:</strong> your text never leaves your computer. Install <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>, run <code>ollama pull llama3.1</code>, then start it with <code>OLLAMA_ORIGINS=* ollama serve</code>. Optional: nothing else needs it.</p>
+    </div>
+
+    <p id="settings-status" class="settings-status" role="status"></p>
+    <div class="sheet-foot"><button class="primary" value="done">Done</button></div>
+  </form>
+</dialog>
+
+<div id="bubble" class="bubble" role="dialog" aria-label="Corrected fact" hidden>
+  <div class="bubble-label">Corrected fact</div>
+  <p id="bubble-correction" class="bubble-correction"></p>
+  <p id="bubble-why" class="bubble-why"></p>
+</div>
+
+<script src="core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
