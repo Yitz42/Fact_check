@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fact Check</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>Fact Check</h1>
+    <p class="sub">Your text stays exactly as written. False claims are highlighted in red, click one for the corrected fact.</p>
+  </header>
+
+  <textarea id="input" placeholder="Paste or type your text here…" spellcheck="false" autofocus></textarea>
+  <div id="review" class="review" hidden></div>
+
+  <div class="bar">
+    <button id="check" class="primary">Fact-check</button>
+    <button id="edit" hidden>Edit text</button>
+    <span id="status" role="status"></span>
+  </div>
+</main>
+
+<div id="bubble" class="bubble" role="dialog" aria-label="Corrected fact" hidden>
+  <div class="bubble-label">Corrected fact</div>
+  <p id="bubble-correction" class="bubble-correction"></p>
+  <p id="bubble-why" class="bubble-why"></p>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
