@@ -8,6 +8,10 @@
   const bubble = $("bubble");
   const bubbleCorrection = $("bubble-correction");
   const bubbleWhy = $("bubble-why");
+  const bubbleLabel = $("bubble-label");
+  const bubbleSources = $("bubble-sources");
+  const bubbleSourcesNote = $("bubble-sources-note");
+  const legendEl = $("legend");
   const tabsEl = $("tabs");
   const fileEl = $("file");
   const dropEl = $("drop");
@@ -17,6 +21,11 @@
   const settingsStatus = $("settings-status");
   const keyEl = $("key");
   const rememberEl = $("remember");
+  const searchFieldEl = $("search-field");
+  const webSearchEl = $("web-search");
+  const searchHintEl = $("search-hint");
+  const suggestionsEl = $("suggestions");
+  const suggestionsListEl = $("suggestions-list");
   const modelEl = $("model");
   const modelMenuEl = $("model-menu");
   const providerEl = $("provider");
@@ -54,6 +63,9 @@
   cfg.models = cfg.models || {};
   cfg.urls = cfg.urls || {};
   cfg.recent = cfg.recent || {};
+  // Web search is ticked per provider. (An earlier version had one switch, for Claude.)
+  cfg.search = cfg.search || (cfg.webSearch ? { anthropic: true } : {});
+  delete cfg.webSearch;
   const saveCfg = () => store.set("localStorage", "fc_cfg", JSON.stringify(cfg));
 
   // Keys live in memory per provider; each is saved under its own storage key.
@@ -201,8 +213,8 @@
     const base = p.needsUrl ? (cfg.urls[p.id] || "").trim() : "";
     const model = (cfg.models[p.id] || p.defaultModel || "").trim();
     if (p.needsUrl && (!base || !model)) return free;
-    const engine = Core.engineFor(p.id, { key, model, base });
-    engine.label = `${p.short} · ${modelName(p, model)}`;
+    const engine = Core.engineFor(p.id, { key, model, base, webSearch: cfg.search[p.id] });
+    engine.label = `${p.short} · ${modelName(p, model)}${engine.webSearch ? " · " + p.webSearch.label : ""}`;
     return engine;
   }
 
@@ -227,6 +239,14 @@
     keyLabelEl.textContent = p.keyOptional ? "API key (optional)" : `${p.short} API key`;
     keyEl.value = keys[p.id] || "";
     rememberEl.checked = remembered(p.id);
+    searchFieldEl.hidden = !p.webSearch;
+    webSearchEl.checked = Boolean(cfg.search[p.id]);
+    searchHintEl.replaceChildren(SEARCH_HINT[p.id] || "");
+    if (p.id === "gemini") {
+      const a = document.createElement("a");
+      a.href = "https://ai.google.dev/gemini-api/docs/pricing"; a.target = "_blank"; a.rel = "noopener"; a.textContent = "Google's pricing page";
+      searchHintEl.append(a, ".");
+    }
     modelEl.value = cfg.models[p.id] || p.defaultModel || "";
     modelEl.placeholder = p.defaultModel || "Model name";
     renderModelMenu(p);
@@ -239,6 +259,11 @@
     }
     keyHintEl.append(`${p.keyNote ? p.keyNote + " " : ""}It goes straight from this page to ${p.needsUrl ? "that server" : p.short} and is only saved if you tick the box.`);
   }
+
+  const SEARCH_HINT = {
+    anthropic: "Claude looks claims up online and links the pages it found. Slower, and Anthropic bills about $0.01 per search (up to 10 per part of your text) on top of normal usage.",
+    gemini: "Gemini looks claims up with Google Search. Google only reveals which sites it found, so links are matched by site, and Google's search suggestions are shown under your text. Slower, and grounded requests are billed separately after a free allowance: see ",
+  };
 
   function saveKey() {
     const id = cfg.provider;
@@ -272,6 +297,7 @@
   });
   keyEl.addEventListener("input", saveKey);
   rememberEl.addEventListener("change", saveKey);
+  webSearchEl.addEventListener("change", () => { cfg.search[cfg.provider] = webSearchEl.checked; saveCfg(); refreshEngine(); });
   modelEl.addEventListener("input", () => {
     cfg.models[cfg.provider] = modelEl.value.trim();
     saveCfg();
@@ -413,13 +439,16 @@
       review.hidden = false;
       checkBtn.hidden = true;
       editBtn.hidden = false;
-      const n = doc.claims.length;
-      let message = n === 0 ? "No false claims found." : `${n} false claim${n === 1 ? "" : "s"} found. Click a red highlight.`;
+      legendEl.hidden = !doc.claims.length;
+      showSuggestions(doc.suggestions);
+      let message = doc.claims.length ? `${summarize(doc.claims)}. Click a highlight for the facts and sources.` : "Nothing false, misrepresented or uncertain found.";
       if (doc.unplaced) message += ` (${doc.unplaced} couldn't be located in the text.)`;
       if (doc.note) message += ` ${doc.note}`;
       setStatus(message);
     } else {
       input.value = doc.text;
+      legendEl.hidden = true;
+      showSuggestions([]);
       input.hidden = false;
       review.hidden = true;
       checkBtn.hidden = false;
@@ -430,7 +459,37 @@
 
   input.addEventListener("input", () => { current().text = input.value; });
 
+  // Google's search suggestions (shown whenever Gemini used Google Search). Their HTML comes from
+  // Google, so it goes in a sandboxed frame: no scripts, no access to this page, links open in a new tab.
+  function showSuggestions(list) {
+    list = list || [];
+    suggestionsEl.hidden = !list.length;
+    suggestionsListEl.replaceChildren(...list.map((html) => {
+      const frame = document.createElement("iframe");
+      frame.className = "suggestion";
+      frame.title = "Google Search suggestions";
+      frame.setAttribute("sandbox", "allow-popups allow-popups-to-escape-sandbox");
+      frame.setAttribute("referrerpolicy", "no-referrer");
+      frame.srcdoc = '<!doctype html><meta charset="utf-8"><base target="_blank"><style>body{margin:0}</style>' + html;
+      return frame;
+    }));
+  }
+
   // ---------- rendering: original text, unchanged, with <mark> around flagged ranges ----------
+  const VERDICT_TEXT = {
+    false: { one: "false claim", many: "false claims", label: "Corrected fact" },
+    misleading: { one: "misrepresented claim", many: "misrepresented claims", label: "Misrepresented: what's accurate" },
+    unverified: { one: "claim that can't be said definitely", many: "claims that can't be said definitely", label: "Can't be said definitely" },
+  };
+
+  // e.g. "2 false claims, 1 misrepresented claim"
+  function summarize(claims) {
+    return Core.VERDICTS.map((v) => {
+      const n = claims.filter((c) => c.verdict === v).length;
+      return n ? `${n} ${n === 1 ? VERDICT_TEXT[v].one : VERDICT_TEXT[v].many}` : "";
+    }).filter(Boolean).join(", ");
+  }
+
   let currentClaims = [];
   let activeMark = null;
 
@@ -442,7 +501,8 @@
       if (claim.start < pos) return;
       review.append(text.slice(pos, claim.start));
       const mark = document.createElement("mark");
-      mark.className = "false-claim";
+      mark.className = "claim";
+      mark.dataset.verdict = claim.verdict;
       mark.tabIndex = 0;
       mark.dataset.claim = String(i);
       mark.textContent = text.slice(claim.start, claim.end);
@@ -459,14 +519,59 @@
     hideBubble();
     activeMark = mark;
     mark.classList.add("active");
+    bubble.dataset.verdict = claim.verdict;
+    bubbleLabel.textContent = VERDICT_TEXT[claim.verdict].label;
     bubbleCorrection.textContent = claim.correction;
     bubbleWhy.textContent = claim.explanation;
+    fillSources(claim);
     bubble.hidden = false;
     const rect = mark.getBoundingClientRect();
     const width = bubble.offsetWidth;
     const left = Math.min(Math.max(12, rect.left), window.innerWidth - width - 12);
     bubble.style.left = `${left + window.scrollX}px`;
     bubble.style.top = `${rect.bottom + window.scrollY + 8}px`;
+  }
+
+  // Source links (already limited to http/https by the engine), plus a web search for the claim,
+  // which always works even when the AI gave no sources.
+  function fillSources(claim) {
+    bubbleSources.replaceChildren();
+    const link = (href, text) => {
+      const a = document.createElement("a");
+      a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = text;
+      return a;
+    };
+    for (const src of claim.sources) {
+      const li = document.createElement("li");
+      li.append(link(src.url, src.title));
+      const host = new URL(src.url).hostname.replace(/^www\./, "");
+      const viaGoogle = host === "vertexaisearch.cloud.google.com"; // Gemini's grounding redirect
+      if (!src.title.includes(host)) {
+        const h = document.createElement("span");
+        h.className = "host";
+        h.textContent = viaGoogle ? " (via Google Search)" : ` (${host})`;
+        li.append(h);
+      }
+      if (src.fromSearch) {
+        const b = document.createElement("span");
+        b.className = "found";
+        b.textContent = src.siteOnly ? "\u2713 site found by search" : "\u2713 found by web search";
+        li.append(" ", b);
+      }
+      bubbleSources.append(li);
+    }
+    const quote = current().text.slice(claim.start, claim.end).replace(/\s+/g, " ").trim();
+    const search = document.createElement("li");
+    search.className = "search";
+    search.append(link("https://www.google.com/search?q=" + encodeURIComponent(quote), "Search the web for this claim \u2197"));
+    bubbleSources.append(search);
+    bubbleSourcesNote.textContent = !claim.searched
+      ? "Links are suggested by the AI from memory. Open them to confirm."
+      : claim.sources.every((s) => s.fromSearch && !s.siteOnly)
+        ? "Found by web search. Open them to read the details."
+        : claim.sources.some((s) => s.siteOnly)
+          ? "\u201cSite found\u201d means the search found pages on that site, but the exact link came from memory. Unmarked links are from memory too, so confirm them."
+          : "Links marked \u2713 came from the web search; the others are from memory, so confirm them.";
   }
 
   function hideBubble() {
@@ -476,14 +581,14 @@
   }
 
   review.addEventListener("click", (event) => {
-    const mark = event.target.closest("mark.false-claim");
+    const mark = event.target.closest("mark.claim");
     if (!mark) return;
     event.stopPropagation();
     if (mark === activeMark) return hideBubble();
     showBubble(mark, currentClaims[Number(mark.dataset.claim)]);
   });
   review.addEventListener("keydown", (event) => {
-    if ((event.key === "Enter" || event.key === " ") && event.target.matches("mark.false-claim")) {
+    if ((event.key === "Enter" || event.key === " ") && event.target.matches("mark.claim")) {
       event.preventDefault();
       event.target.click();
     }
@@ -510,8 +615,10 @@
       doc.claims = result.claims;
       if (engine.id !== "free") pushRecent(engine.id, engine.model);
       doc.unplaced = result.unplaced;
+      doc.suggestions = result.suggestions;
       const notes = [`Checked with ${engine.label}.`];
       if (cfg.provider !== "free" && engine.id === "free") notes.push("(Your chosen AI isn't set up yet, so the free model was used.)");
+      if (result.searches) notes.push(`Ran ${result.searches} web search${result.searches === 1 ? "" : "es"}.`);
       if (result.failedParts) notes.push(`${result.failedParts} of ${result.parts} parts couldn't be checked.`);
       doc.note = notes.join(" ");
       if (current() === doc) showDoc(); else renderTabs();

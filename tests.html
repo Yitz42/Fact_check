@@ -53,6 +53,37 @@
     const r = C.locateClaims("abc def", [{ quote: "def" }], 100);
     ok(r.located[0].start === 104 && r.located[0].end === 107);
   });
+  await test("locate: verdict and sources are carried over; old replies default to false", () => {
+    const text = "Paris is in Germany. Coffee doubles your lifespan. Shakespeare wrote exactly 39 plays.";
+    const r = C.locateClaims(text, [
+      { quote: "in Germany", correction: "France" },
+      { quote: "doubles your lifespan", verdict: "misleading", correction: "x", sources: [{ title: "WHO", url: "https://www.who.int/" }] },
+      { quote: "exactly 39 plays", verdict: "unverified", correction: "y", sources: [] },
+    ]);
+    ok(eq(r.located.map((c) => c.verdict), ["false", "misleading", "unverified"]), JSON.stringify(r.located));
+    ok(eq(r.located[1].sources, [{ title: "WHO", url: "https://www.who.int/" }]));
+    ok(eq(r.located[0].sources, []) && eq(r.located[2].sources, []));
+  });
+  await test("verdict: loose wordings map to the three colours", () => {
+    ok(C.normalizeVerdict("Misrepresented") === "misleading" && C.normalizeVerdict("missing context") === "misleading");
+    ok(C.normalizeVerdict("disputed") === "unverified" && C.normalizeVerdict("Can't be stated definitively") === "unverified");
+    ok(C.normalizeVerdict("FALSE") === "false" && C.normalizeVerdict(undefined) === "false" && C.normalizeVerdict("significant error") === "false");
+  });
+  await test("sources: only http(s) links, at most 3, no repeats, missing titles use the host", () => {
+    const s = C.cleanSources([
+      { title: "Bad", url: "javascript:alert(1)" }, { title: "Data", url: "data:text/html,hi" }, { title: "Rel", url: "/wiki/x" },
+      { title: "", url: "https://www.britannica.com/place/Paris" }, "https://en.wikipedia.org/wiki/Paris",
+      { title: "Dup", url: "https://en.wikipedia.org/wiki/Paris" }, { title: "Gov", url: "http://example.gov/a" }, { title: "Fourth", url: "https://x.org" },
+    ]);
+    ok(eq(s.map((x) => x.url), ["https://www.britannica.com/place/Paris", "https://en.wikipedia.org/wiki/Paris", "http://example.gov/a"]), JSON.stringify(s));
+    ok(s[0].title === "britannica.com" && s[1].title === "en.wikipedia.org");
+    ok(eq(C.cleanSources(undefined), []) && eq(C.cleanSources("https://x.org"), []));
+  });
+  await test("schema and prompt ask for a verdict and sources", () => {
+    const item = C.SCHEMA.properties.claims.items;
+    ok(eq(item.properties.verdict.enum, ["false", "misleading", "unverified"]) && item.required.includes("sources"));
+    ok(/misleading/.test(C.SYSTEM_PROMPT) && /unverified/.test(C.SYSTEM_PROMPT) && /Never invent a URL/.test(C.SYSTEM_PROMPT));
+  });
   await test("parse: plain JSON, fenced JSON, and JSON inside prose", () => {
     const body = '{"claims":[{"quote":"a","correction":"b","explanation":"c"}]}';
     ok(C.parseClaims(body).length === 1);
@@ -100,7 +131,54 @@
     ok(c.headers["x-api-key"] === "sk-ant-x" && c.headers["anthropic-dangerous-direct-browser-access"] === "true");
     ok(c.body.model === "claude-opus-5-5" && !("tool_choice" in c.body));
     ok(c.body.output_config.format.type === "json_schema");
-    ok(r.claims.length === 1 && r.claims[0].start === 12);
+    ok(r.claims.length === 1 && r.claims[0].start === 12 && r.claims[0].verdict === "false");
+  });
+  await test("anthropic: no web search unless it's ticked", async () => {
+    const calls = stubFetch(() => ({ json: { stop_reason: "end_turn", content: [{ type: "text", text: '{"claims":[]}' }] } }));
+    await C.checkText("hello there", C.engineFor("anthropic", { key: "k" }));
+    ok(!("tools" in calls[0].body) && calls[0].body.system === C.SYSTEM_PROMPT);
+    ok(C.engineFor("openai", { key: "k", webSearch: true }).webSearch === false, "only Claude can search");
+  });
+  const searchReply = (extra) => ({ json: Object.assign({ stop_reason: "end_turn", usage: { server_tool_use: { web_search_requests: 2 } }, content: [
+    { type: "text", text: "I'll check {this} first." },
+    { type: "server_tool_use", id: "srv1", name: "web_search", input: { query: "capital of Australia" } },
+    { type: "web_search_tool_result", tool_use_id: "srv1", content: [
+      { type: "web_search_result", url: "https://en.wikipedia.org/wiki/Canberra", title: "Canberra - Wikipedia", encrypted_content: "x" }] },
+    { type: "text", text: '{"claims":[{"quote":"Sydney","verdict":"false","correction":"Canberra.","explanation":"e","sources":[' },
+    { type: "text", text: '{"title":"Canberra","url":"https://www.en.wikipedia.org/wiki/Canberra/"},{"title":"Made up","url":"https://example.com/nope"},{"title":"Cited","url":"https://www.australia.gov.au/"}]}]}',
+      citations: [{ type: "web_search_result_location", url: "https://australia.gov.au", title: "Gov", cited_text: "..." }] },
+  ] }, extra || {}) });
+  await test("anthropic web search: tool sent, JSON read after the search, sources checked against results", async () => {
+    const calls = stubFetch(() => searchReply());
+    const r = await C.checkText("The capital is Sydney.", C.engineFor("anthropic", { key: "k", model: "claude-opus-5-5", webSearch: true }));
+    const b = calls[0].body;
+    ok(eq(b.tools, [{ type: "web_search_20260209", name: "web_search", max_uses: C.MAX_SEARCHES }]), JSON.stringify(b.tools));
+    ok(!("output_config" in b) && b.system === C.SEARCH_PROMPT);
+    ok(r.claims.length === 1 && r.claims[0].searched === true && r.searches === 2, JSON.stringify(r));
+    ok(eq(r.claims[0].sources.map((x) => x.fromSearch), [true, false, true]), JSON.stringify(r.claims[0].sources));
+  });
+  await test("anthropic web search: a paused turn is sent back unchanged and resumed", async () => {
+    const first = { stop_reason: "pause_turn", usage: { server_tool_use: { web_search_requests: 1 } }, content: [
+      { type: "server_tool_use", id: "srv0", name: "web_search", input: { query: "q" } },
+      { type: "web_search_tool_result", tool_use_id: "srv0", content: [{ type: "web_search_result", url: "https://www.australia.gov.au/", title: "Gov" }] }] };
+    const calls = stubFetch((u, body, n) => n === 1 ? { json: first } : searchReply());
+    const r = await C.checkText("The capital is Sydney.", C.engineFor("anthropic", { key: "k", webSearch: true }));
+    ok(calls.length === 2 && calls[1].body.messages.length === 2);
+    ok(calls[1].body.messages[1].role === "assistant" && eq(calls[1].body.messages[1].content, first.content));
+    ok(r.searches === 3 && r.claims[0].sources[2].fromSearch === true);
+  });
+  await test("anthropic web search: older models fall back to the basic search tool", async () => {
+    const calls = stubFetch((u, body, n) => n === 1
+      ? { status: 400, json: { error: { message: "web_search_20260209 requires allowed_callers direct for this model" } } }
+      : searchReply());
+    const r = await C.checkText("The capital is Sydney.", C.engineFor("anthropic", { key: "k", model: "claude-haiku-4-5", webSearch: true }));
+    ok(calls.length === 2 && calls[1].body.tools[0].type === "web_search_20250305" && r.claims.length === 1);
+  });
+  await test("anthropic web search: switched off for the organization gives a clear message", async () => {
+    stubFetch(() => ({ status: 400, json: { error: { message: "Web search is not enabled for this organization." } } }));
+    let msg = "";
+    try { await C.checkText("hello there", C.engineFor("anthropic", { key: "k", webSearch: true })); } catch (e) { msg = e.message; }
+    ok(/turned off for your Anthropic organization/.test(msg), msg);
   });
   await test("anthropic: retries without output_config if the model rejects it", async () => {
     const calls = stubFetch((url, body, n) => n === 1
@@ -174,6 +252,38 @@
     ok(c.url === "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent", c.url);
     ok(c.headers["x-goog-api-key"] === "AIza-x" && c.body.generationConfig.responseMimeType === "application/json");
     ok(c.body.systemInstruction.parts[0].text === C.SYSTEM_PROMPT && r.claims.length === 1);
+  });
+  await test("gemini Google Search: tool sent, no JSON mode, sources matched by site, suggestions kept", async () => {
+    const redirect = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC123";
+    const answer = JSON.stringify({ claims: [{ quote: "Sydney", verdict: "false", correction: "Canberra.", explanation: "e", sources: [
+      { title: "Canberra - Wikipedia", url: "https://en.wikipedia.org/wiki/Canberra" },
+      { title: "Grounded link", url: redirect },
+      { title: "Made up", url: "https://example.com/x" },
+      { title: "Lookalike", url: "https://notwikipedia.org/x" }] }] });
+    const calls = stubFetch(() => ({ json: { candidates: [{ finishReason: "STOP",
+      content: { parts: [{ text: "Here is the result:\n" + answer }] },
+      groundingMetadata: {
+        webSearchQueries: ["capital of australia", "canberra capital"],
+        searchEntryPoint: { renderedContent: "<div class=chips>canberra</div>" },
+        groundingChunks: [{ web: { uri: redirect, title: "wikipedia.org" } }, { web: { uri: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/Z", title: "britannica.com" } }],
+      } }] } }));
+    const r = await C.checkText("The capital is Sydney.", C.engineFor("gemini", { key: "k", model: "gemini-2.5-pro", webSearch: true }));
+    const b = calls[0].body;
+    ok(eq(b.tools, [{ google_search: {} }]) && !("generationConfig" in b), JSON.stringify(b));
+    ok(b.systemInstruction.parts[0].text === C.GEMINI_SEARCH_PROMPT);
+    ok(r.claims.length === 1 && r.searches === 2 && eq(r.suggestions, ["<div class=chips>canberra</div>"]), JSON.stringify(r));
+    const src = r.claims[0].sources;
+    ok(src.length === 3, "max 3");
+    ok(src[0].fromSearch === true && src[0].siteOnly === true, "wikipedia matched by site");
+    ok(src[1].fromSearch === true && !src[1].siteOnly, "redirect link matched exactly");
+    ok(src[2].fromSearch === false, "unrelated site not marked");
+    ok(!C.engineFor("gemini", { key: "k" }).webSearch, "off unless ticked");
+  });
+  await test("sources: site matching doesn't accept lookalike domains", async () => {
+    stubFetch(() => ({ json: { candidates: [{ content: { parts: [{ text: JSON.stringify({ claims: [{ quote: "Sydney", sources: [{ title: "x", url: "https://notwikipedia.org/a" }] }] }) }] },
+      groundingMetadata: { groundingChunks: [{ web: { uri: "https://vertexaisearch.cloud.google.com/r/1", title: "wikipedia.org" } }] } }] } }));
+    const r = await C.checkText("The capital is Sydney.", C.engineFor("gemini", { key: "k", webSearch: true }));
+    ok(r.claims[0].sources[0].fromSearch === false, JSON.stringify(r.claims[0].sources));
   });
   await test("gemini: blocked prompt gives a clear error", async () => {
     stubFetch(() => ({ json: { promptFeedback: { blockReason: "SAFETY" } } }));
