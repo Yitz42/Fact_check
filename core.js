@@ -23,6 +23,15 @@
     'Reply with ONLY a JSON object of the form {"claims":[{"quote":"...","verdict":"false|misleading|unverified","correction":"...","explanation":"...","sources":[{"title":"...","url":"https://..."}]}]}.',
   ].join("\n");
 
+  // Added when Claude may search the web (opt-in), so sources are real pages it actually found.
+  const SEARCH_PROMPT = SYSTEM_PROMPT + "\n\n" + [
+    "You can use the web_search tool. Search to confirm or rule out claims you are not certain about, and to find sources.",
+    "- Every source `url` must be copied exactly from your search results.",
+    "- When you have finished searching, reply with ONLY the JSON object, with no other text before or after it.",
+  ].join("\n");
+  // Searches per checked part (each costs about $0.01 on the Anthropic bill).
+  const MAX_SEARCHES = 10;
+
   // Severity, most serious first. Each is drawn in its own colour (red, orange, yellow).
   const VERDICTS = ["false", "misleading", "unverified"];
 
@@ -75,6 +84,7 @@
       privacy: "Runs on a small open model (GPT-OSS 20B) hosted by Pollinations.ai. It's less accurate than the others, and your text is sent to that service, so don't use it for sensitive documents." },
     { id: "anthropic", label: "Claude (Anthropic)", short: "Claude", api: "anthropic", group: "cloud", chunk: CHUNK.large,
       defaultModel: "claude-opus-5-5", keyUrl: "https://console.anthropic.com/settings/keys", keyHost: "console.anthropic.com",
+      webSearch: true,
       models: [["claude-sonnet-5-5", "Claude Sonnet 5.5"], ["claude-opus-5-5", "Claude Opus 5.5"], ["claude-fable-5-1", "Claude Fable 5.1"], ["claude-haiku-4-5", "Claude Haiku 4.5"]],
       keyNote: "It must be an API key (a Claude.ai or Claude Code login won't work)." },
     { id: "openai", label: "ChatGPT (OpenAI)", short: "ChatGPT", api: "openai", group: "cloud", chunk: CHUNK.large,
@@ -114,7 +124,7 @@
     const p = providerById(id);
     const model = cfg.model || p.defaultModel;
     return {
-      id: p.id, api: p.api, key: cfg.key || "", model,
+      id: p.id, api: p.api, key: cfg.key || "", model, webSearch: Boolean(cfg.webSearch && p.webSearch),
       base: (cfg.base || p.base || "").replace(/\/+$/, ""), url: p.url, extra: p.extra,
       chunk: p.chunk, label: p.id === "free" ? p.short : p.short + (model ? " \u00b7 " + model : ""),
     };
@@ -171,8 +181,17 @@
     return "false";
   }
 
+  // Compare links loosely: ignore scheme, "www.", a trailing slash and any #fragment.
+  function urlKey(href) {
+    try {
+      const u = new URL(href);
+      return u.hostname.toLowerCase().replace(/^www\./, "") + u.pathname.replace(/\/+$/, "") + u.search;
+    } catch (_) { return ""; }
+  }
+
   // Keep only well-formed http(s) links (never javascript: or data:), at most 3, no repeats.
-  function cleanSources(list) {
+  // `found` (a Set of urlKey()s from a web search) marks the links the search really returned.
+  function cleanSources(list, found) {
     const out = [];
     for (const item of Array.isArray(list) ? list : []) {
       const raw = typeof item === "string" ? item : item && item.url;
@@ -181,7 +200,9 @@
       if (url.protocol !== "https:" && url.protocol !== "http:") continue;
       if (out.some((s) => s.url === url.href)) continue;
       const title = String((item && item.title) || "").trim() || url.hostname.replace(/^www\./, "");
-      out.push({ title, url: url.href });
+      const src = { title, url: url.href };
+      if (found) src.fromSearch = found.has(urlKey(url.href));
+      out.push(src);
       if (out.length === 3) break;
     }
     return out;
@@ -189,7 +210,7 @@
 
   // Map each claim's quote to [start, end) in `text` (offset added for chunked checks).
   // Quotes not found are dropped, never guessed, so every highlight is the user's own text.
-  function locateClaims(text, claims, offset) {
+  function locateClaims(text, claims, offset, found) {
     offset = offset || 0;
     const taken = [];
     const located = [];
@@ -213,7 +234,8 @@
         verdict: normalizeVerdict(claim.verdict),
         correction: String(claim.correction || "").trim(),
         explanation: String(claim.explanation || "").trim(),
-        sources: cleanSources(claim.sources),
+        sources: cleanSources(claim.sources, found),
+        searched: Boolean(found),
       });
     }
     located.sort((a, b) => a.start - b.start);
@@ -277,6 +299,10 @@
     { role: "user", content: userMessage(text) },
   ];
 
+  // Claude's web search tool, newest first. The newer one filters results with code first
+  // (Claude 4.6 and later); older models are retried with the basic one.
+  const WEB_SEARCH_TOOLS = ["web_search_20260209", "web_search_20250305"];
+
   async function askAnthropic(engine, text) {
     const headers = {
       "x-api-key": engine.key,
@@ -286,27 +312,72 @@
     const body = {
       model: engine.model || DEFAULT_ANTHROPIC_MODEL,
       max_tokens: 16000,
-      system: SYSTEM_PROMPT,
-      // Structured output rather than forced tool use (forced tool_choice 400s on newer models).
-      output_config: { format: { type: "json_schema", schema: SCHEMA } },
+      system: engine.webSearch ? SEARCH_PROMPT : SYSTEM_PROMPT,
       messages: [{ role: "user", content: userMessage(text) }],
     };
-    let data;
-    try {
-      data = await request(ANTHROPIC + "/messages", jsonPost(body, headers), "Claude");
-    } catch (err) {
-      // Some older models don't support structured output; the prompt still asks for JSON.
-      if (err.status === 400 && /output_config|format|schema|structured/i.test(err.message)) {
-        delete body.output_config;
-        data = await request(ANTHROPIC + "/messages", jsonPost(body, headers), "Claude");
-      } else {
+    if (engine.webSearch) {
+      // Search answers always carry citations, which can't be combined with structured output,
+      // so the prompt alone asks for JSON (parseClaims tolerates stray prose).
+      body.tools = [{ type: WEB_SEARCH_TOOLS[0], name: "web_search", max_uses: MAX_SEARCHES }];
+    } else {
+      // Structured output rather than forced tool use (forced tool_choice 400s on newer models).
+      body.output_config = { format: { type: "json_schema", schema: SCHEMA } };
+    }
+    const send = async () => {
+      try {
+        return await request(ANTHROPIC + "/messages", jsonPost(body, headers), "Claude");
+      } catch (err) {
+        if (err.status !== 400) throw err;
+        if (engine.webSearch && /not enabled|disabled/i.test(err.message) && /search/i.test(err.message)) {
+          throw new ApiError("Web search is turned off for your Anthropic organization. An admin can turn it on in the Claude Console (Settings \u2192 Capabilities), or untick \u201cSearch the web\u201d.", 400);
+        }
+        // Older models: no code-filtered search, or no structured output. Retry the simpler form.
+        if (engine.webSearch && body.tools[0].type !== WEB_SEARCH_TOOLS[1] && /web_search|allowed_callers|code_execution|tool/i.test(err.message)) {
+          body.tools = [{ type: WEB_SEARCH_TOOLS[1], name: "web_search", max_uses: MAX_SEARCHES }];
+          return request(ANTHROPIC + "/messages", jsonPost(body, headers), "Claude");
+        }
+        if (body.output_config && /output_config|format|schema|structured/i.test(err.message)) {
+          delete body.output_config;
+          return request(ANTHROPIC + "/messages", jsonPost(body, headers), "Claude");
+        }
         throw err;
       }
+    };
+
+    // A long search turn can come back paused; send it back unchanged to let it finish.
+    const blocks = [];
+    let searches = 0;
+    let data;
+    for (let round = 0; ; round++) {
+      data = await send();
+      blocks.push(...(data.content || []));
+      searches += (data.usage && data.usage.server_tool_use && data.usage.server_tool_use.web_search_requests) || 0;
+      if (data.stop_reason !== "pause_turn") break;
+      if (round === 4) throw new ApiError("The web search took too long. Try a shorter text.", 0);
+      body.messages = [body.messages[0], { role: "assistant", content: blocks.slice() }];
     }
     if (data.stop_reason === "refusal") throw new ApiError("The model declined to check this text. Try a different model.", 0);
     if (data.stop_reason === "max_tokens") throw new ApiError("Too many findings to return for one part. Try a shorter text.", 0);
-    const block = (data.content || []).find((b) => b.type === "text");
-    return block ? block.text : "";
+    if (!engine.webSearch) {
+      const block = blocks.find((b) => b.type === "text");
+      return block ? block.text : "";
+    }
+    // The answer is the text after the last search result (citations split it into several blocks).
+    let last = -1;
+    blocks.forEach((b, i) => { if (b.type !== "text") last = i; });
+    const answer = blocks.slice(last + 1).filter((b) => b.type === "text").map((b) => b.text).join("");
+    return { text: answer, found: searchedUrls(blocks), searches };
+  }
+
+  // Every page the search returned or cited, as urlKey()s.
+  function searchedUrls(blocks) {
+    const found = new Set();
+    const add = (u) => { const k = urlKey(u); if (k) found.add(k); };
+    for (const b of blocks) {
+      if (b.type === "web_search_tool_result" && Array.isArray(b.content)) b.content.forEach((r) => add(r.url));
+      if (b.type === "text" && Array.isArray(b.citations)) b.citations.forEach((c) => add(c.url));
+    }
+    return found;
   }
 
   // OpenAI chat format: ChatGPT, Mistral, Groq, OpenRouter, Grok, DeepSeek, the free service,
@@ -454,12 +525,15 @@
     let unplaced = 0;
     let failedParts = 0;
     let lastError = null;
+    let searches = 0;
     for (let i = 0; i < chunks.length; i++) {
       if (onProgress && chunks.length > 1) onProgress(i + 1, chunks.length);
       const piece = text.slice(chunks[i].start, chunks[i].end);
       try {
-        const raw = await ASK[engine.api](engine, piece);
-        const result = locateClaims(piece, parseClaims(raw), chunks[i].start);
+        const reply = await ASK[engine.api](engine, piece);
+        const raw = typeof reply === "string" ? reply : reply.text;
+        if (reply.searches) searches += reply.searches;
+        const result = locateClaims(piece, parseClaims(raw), chunks[i].start, reply.found);
         claims.push(...result.located);
         unplaced += result.dropped;
       } catch (err) {
@@ -470,11 +544,11 @@
     }
     if (failedParts === chunks.length && lastError) throw lastError;
     claims.sort((a, b) => a.start - b.start);
-    return { claims, unplaced, failedParts, parts: chunks.length };
+    return { claims, unplaced, failedParts, parts: chunks.length, searches };
   }
 
   root.FactCore = {
-    SYSTEM_PROMPT, SCHEMA, VERDICTS, FREE_MODEL, DEFAULT_ANTHROPIC_MODEL, DEFAULT_OLLAMA_URL, CHUNK, PROVIDERS,
+    SYSTEM_PROMPT, SEARCH_PROMPT, MAX_SEARCHES, SCHEMA, VERDICTS, FREE_MODEL, DEFAULT_ANTHROPIC_MODEL, DEFAULT_OLLAMA_URL, CHUNK, PROVIDERS,
     providerById, engineFor, splitChunks, normalizeVerdict, cleanSources, locateClaims, parseClaims, checkText, listModels, scoreModel, rankModels,
   };
 })(typeof window !== "undefined" ? window : globalThis);

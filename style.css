@@ -246,6 +246,9 @@ mark.claim:hover, mark.claim.active { background: var(--tone); color: var(--tone
 .bubble-sources li { margin: 2px 0; overflow-wrap: anywhere; }
 .bubble-sources li.search { list-style: none; margin-left: -18px; margin-top: 6px; font-size: 0.85rem; }
 .bubble-sources .host { color: var(--muted); font-size: 0.8rem; }
+.bubble-sources .found { color: var(--ok); font-size: 0.78rem; font-weight: 600; white-space: nowrap; }
+.search-option { display: flex; flex-direction: column; gap: 4px; }
+.search-option .hint { padding-left: 26px; }
 .bubble-sources-note { margin: 6px 0 0; color: var(--muted); font-size: 0.75rem; }
 
 /* ---------- settings sheet ---------- */

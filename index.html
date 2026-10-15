@@ -82,6 +82,10 @@
         <input id="key" type="password" placeholder="Paste your key" autocomplete="off" spellcheck="false">
       </label>
       <label class="check"><input id="remember" type="checkbox"> Remember key on this device</label>
+      <div class="search-option" id="search-field" hidden>
+        <label class="check"><input id="web-search" type="checkbox"> Search the web for real sources</label>
+        <span class="hint">Claude looks claims up online and links the pages it found. Slower, and Anthropic bills about $0.01 per search (up to 10 per part of your text) on top of normal usage.</span>
+      </div>
       <div class="field">
         <span>Model</span>
         <span class="row">
@@ -121,7 +125,7 @@
   <div class="bubble-sources">
     <div class="bubble-sources-head">Sources</div>
     <ul id="bubble-sources"></ul>
-    <p class="bubble-sources-note">Links are suggested by the AI. Open them to confirm.</p>
+    <p id="bubble-sources-note" class="bubble-sources-note"></p>
   </div>
 </div>
 

@@ -10,6 +10,7 @@
   const bubbleWhy = $("bubble-why");
   const bubbleLabel = $("bubble-label");
   const bubbleSources = $("bubble-sources");
+  const bubbleSourcesNote = $("bubble-sources-note");
   const legendEl = $("legend");
   const tabsEl = $("tabs");
   const fileEl = $("file");
@@ -20,6 +21,8 @@
   const settingsStatus = $("settings-status");
   const keyEl = $("key");
   const rememberEl = $("remember");
+  const searchFieldEl = $("search-field");
+  const webSearchEl = $("web-search");
   const modelEl = $("model");
   const modelMenuEl = $("model-menu");
   const providerEl = $("provider");
@@ -204,8 +207,8 @@
     const base = p.needsUrl ? (cfg.urls[p.id] || "").trim() : "";
     const model = (cfg.models[p.id] || p.defaultModel || "").trim();
     if (p.needsUrl && (!base || !model)) return free;
-    const engine = Core.engineFor(p.id, { key, model, base });
-    engine.label = `${p.short} · ${modelName(p, model)}`;
+    const engine = Core.engineFor(p.id, { key, model, base, webSearch: cfg.webSearch });
+    engine.label = `${p.short} · ${modelName(p, model)}${engine.webSearch ? " · web search" : ""}`;
     return engine;
   }
 
@@ -230,6 +233,8 @@
     keyLabelEl.textContent = p.keyOptional ? "API key (optional)" : `${p.short} API key`;
     keyEl.value = keys[p.id] || "";
     rememberEl.checked = remembered(p.id);
+    searchFieldEl.hidden = !p.webSearch;
+    webSearchEl.checked = Boolean(cfg.webSearch);
     modelEl.value = cfg.models[p.id] || p.defaultModel || "";
     modelEl.placeholder = p.defaultModel || "Model name";
     renderModelMenu(p);
@@ -275,6 +280,7 @@
   });
   keyEl.addEventListener("input", saveKey);
   rememberEl.addEventListener("change", saveKey);
+  webSearchEl.addEventListener("change", () => { cfg.webSearch = webSearchEl.checked; saveCfg(); refreshEngine(); });
   modelEl.addEventListener("input", () => {
     cfg.models[cfg.provider] = modelEl.value.trim();
     saveCfg();
@@ -510,6 +516,12 @@
         h.textContent = ` (${host})`;
         li.append(h);
       }
+      if (src.fromSearch) {
+        const b = document.createElement("span");
+        b.className = "found";
+        b.textContent = "\u2713 found by web search";
+        li.append(" ", b);
+      }
       bubbleSources.append(li);
     }
     const quote = current().text.slice(claim.start, claim.end).replace(/\s+/g, " ").trim();
@@ -517,6 +529,11 @@
     search.className = "search";
     search.append(link("https://www.google.com/search?q=" + encodeURIComponent(quote), "Search the web for this claim \u2197"));
     bubbleSources.append(search);
+    bubbleSourcesNote.textContent = !claim.searched
+      ? "Links are suggested by the AI from memory. Open them to confirm."
+      : claim.sources.every((s) => s.fromSearch)
+        ? "Found by Claude's web search. Open them to read the details."
+        : "Links marked \u2713 came from Claude's web search; the others are from memory, so confirm them.";
   }
 
   function hideBubble() {
@@ -562,6 +579,7 @@
       doc.unplaced = result.unplaced;
       const notes = [`Checked with ${engine.label}.`];
       if (cfg.provider !== "free" && engine.id === "free") notes.push("(Your chosen AI isn't set up yet, so the free model was used.)");
+      if (result.searches) notes.push(`Ran ${result.searches} web search${result.searches === 1 ? "" : "es"}.`);
       if (result.failedParts) notes.push(`${result.failedParts} of ${result.parts} parts couldn't be checked.`);
       doc.note = notes.join(" ");
       if (current() === doc) showDoc(); else renderTabs();
