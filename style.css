@@ -10,6 +10,12 @@
   --accent-soft: rgba(91, 91, 240, 0.1);
   --red: #e11d48;
   --red-bg: rgba(225, 29, 72, 0.14);
+  --orange: #c2410c;
+  --orange-bg: rgba(234, 88, 12, 0.16);
+  --yellow: #ca8a04;
+  --yellow-bg: rgba(250, 204, 21, 0.38);
+  --yellow-ink: #a16207;
+  --mark-active-fg: #ffffff;
   --ok: #16a34a;
   --shadow: 0 1px 2px rgba(18, 19, 26, 0.04), 0 8px 30px rgba(18, 19, 26, 0.06);
   --radius: 16px;
@@ -27,6 +33,12 @@
     --accent-soft: rgba(124, 124, 255, 0.14);
     --red: #fb7185;
     --red-bg: rgba(251, 113, 133, 0.2);
+    --orange: #fb923c;
+    --orange-bg: rgba(251, 146, 60, 0.22);
+    --yellow: #facc15;
+    --yellow-bg: rgba(250, 204, 21, 0.2);
+    --yellow-ink: #facc15;
+    --mark-active-fg: #0d0e14;
     --ok: #4ade80;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 30px rgba(0, 0, 0, 0.35);
     color-scheme: dark;
@@ -187,11 +199,16 @@ button:focus-visible, .engine:focus-visible, .tab:focus-visible, mark:focus-visi
 .tab .close:hover { background: var(--border); color: var(--fg); }
 
 /* ---------- highlights + bubble ---------- */
-mark.false-claim {
-  background: var(--red-bg);
+/* One colour per verdict: red = false, orange = misrepresented, yellow = can't be said definitely. */
+[data-verdict="false"] { --tone: var(--red); --tone-bg: var(--red-bg); --tone-fg: #fff; }
+[data-verdict="misleading"] { --tone: var(--orange); --tone-bg: var(--orange-bg); --tone-fg: var(--mark-active-fg); }
+[data-verdict="unverified"] { --tone: var(--yellow); --tone-bg: var(--yellow-bg); --tone-fg: #12131a; }
+
+mark.claim {
+  background: var(--tone-bg);
   color: inherit;
   border-radius: 4px;
-  text-decoration: underline wavy var(--red);
+  text-decoration: underline wavy var(--tone);
   text-decoration-thickness: 1.5px;
   text-underline-offset: 4px;
   box-decoration-break: clone;
@@ -199,7 +216,11 @@ mark.false-claim {
   cursor: pointer;
   transition: background 0.12s;
 }
-mark.false-claim:hover, mark.false-claim.active { background: var(--red); color: #fff; text-decoration-color: #fff; }
+mark.claim:hover, mark.claim.active { background: var(--tone); color: var(--tone-fg); text-decoration-color: var(--tone-fg); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 10px 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; }
+.legend .key { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 14px; height: 14px; border-radius: 4px; background: var(--tone-bg); border-bottom: 2px solid var(--tone); }
 
 .bubble {
   position: absolute;
@@ -208,16 +229,24 @@ mark.false-claim:hover, mark.false-claim.active { background: var(--red); color:
   padding: 14px 16px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-left: 4px solid var(--red);
+  border-left: 4px solid var(--tone, var(--red));
   border-radius: 14px;
   box-shadow: 0 16px 48px rgba(18, 19, 26, 0.22);
   font-size: 0.95rem;
   line-height: 1.5;
 }
-.bubble-label { color: var(--red); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.bubble-label { color: var(--tone, var(--red)); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.bubble[data-verdict="unverified"] .bubble-label { color: var(--yellow-ink); }
 .bubble-correction { margin: 4px 0 0; font-weight: 600; }
 .bubble-why { margin: 6px 0 0; color: var(--muted); }
 .bubble-why:empty { display: none; }
+.bubble-sources { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.bubble-sources-head { color: var(--muted); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.bubble-sources ul { margin: 4px 0 0; padding-left: 18px; }
+.bubble-sources li { margin: 2px 0; overflow-wrap: anywhere; }
+.bubble-sources li.search { list-style: none; margin-left: -18px; margin-top: 6px; font-size: 0.85rem; }
+.bubble-sources .host { color: var(--muted); font-size: 0.8rem; }
+.bubble-sources-note { margin: 6px 0 0; color: var(--muted); font-size: 0.75rem; }
 
 /* ---------- settings sheet ---------- */
 dialog {

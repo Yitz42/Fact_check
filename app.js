@@ -8,6 +8,9 @@
   const bubble = $("bubble");
   const bubbleCorrection = $("bubble-correction");
   const bubbleWhy = $("bubble-why");
+  const bubbleLabel = $("bubble-label");
+  const bubbleSources = $("bubble-sources");
+  const legendEl = $("legend");
   const tabsEl = $("tabs");
   const fileEl = $("file");
   const dropEl = $("drop");
@@ -413,13 +416,14 @@
       review.hidden = false;
       checkBtn.hidden = true;
       editBtn.hidden = false;
-      const n = doc.claims.length;
-      let message = n === 0 ? "No false claims found." : `${n} false claim${n === 1 ? "" : "s"} found. Click a red highlight.`;
+      legendEl.hidden = !doc.claims.length;
+      let message = doc.claims.length ? `${summarize(doc.claims)}. Click a highlight for the facts and sources.` : "Nothing false, misrepresented or uncertain found.";
       if (doc.unplaced) message += ` (${doc.unplaced} couldn't be located in the text.)`;
       if (doc.note) message += ` ${doc.note}`;
       setStatus(message);
     } else {
       input.value = doc.text;
+      legendEl.hidden = true;
       input.hidden = false;
       review.hidden = true;
       checkBtn.hidden = false;
@@ -431,6 +435,20 @@
   input.addEventListener("input", () => { current().text = input.value; });
 
   // ---------- rendering: original text, unchanged, with <mark> around flagged ranges ----------
+  const VERDICT_TEXT = {
+    false: { one: "false claim", many: "false claims", label: "Corrected fact" },
+    misleading: { one: "misrepresented claim", many: "misrepresented claims", label: "Misrepresented: what's accurate" },
+    unverified: { one: "claim that can't be said definitely", many: "claims that can't be said definitely", label: "Can't be said definitely" },
+  };
+
+  // e.g. "2 false claims, 1 misrepresented claim"
+  function summarize(claims) {
+    return Core.VERDICTS.map((v) => {
+      const n = claims.filter((c) => c.verdict === v).length;
+      return n ? `${n} ${n === 1 ? VERDICT_TEXT[v].one : VERDICT_TEXT[v].many}` : "";
+    }).filter(Boolean).join(", ");
+  }
+
   let currentClaims = [];
   let activeMark = null;
 
@@ -442,7 +460,8 @@
       if (claim.start < pos) return;
       review.append(text.slice(pos, claim.start));
       const mark = document.createElement("mark");
-      mark.className = "false-claim";
+      mark.className = "claim";
+      mark.dataset.verdict = claim.verdict;
       mark.tabIndex = 0;
       mark.dataset.claim = String(i);
       mark.textContent = text.slice(claim.start, claim.end);
@@ -459,14 +478,45 @@
     hideBubble();
     activeMark = mark;
     mark.classList.add("active");
+    bubble.dataset.verdict = claim.verdict;
+    bubbleLabel.textContent = VERDICT_TEXT[claim.verdict].label;
     bubbleCorrection.textContent = claim.correction;
     bubbleWhy.textContent = claim.explanation;
+    fillSources(claim);
     bubble.hidden = false;
     const rect = mark.getBoundingClientRect();
     const width = bubble.offsetWidth;
     const left = Math.min(Math.max(12, rect.left), window.innerWidth - width - 12);
     bubble.style.left = `${left + window.scrollX}px`;
     bubble.style.top = `${rect.bottom + window.scrollY + 8}px`;
+  }
+
+  // Source links (already limited to http/https by the engine), plus a web search for the claim,
+  // which always works even when the AI gave no sources.
+  function fillSources(claim) {
+    bubbleSources.replaceChildren();
+    const link = (href, text) => {
+      const a = document.createElement("a");
+      a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = text;
+      return a;
+    };
+    for (const src of claim.sources) {
+      const li = document.createElement("li");
+      li.append(link(src.url, src.title));
+      const host = new URL(src.url).hostname.replace(/^www\./, "");
+      if (!src.title.includes(host)) {
+        const h = document.createElement("span");
+        h.className = "host";
+        h.textContent = ` (${host})`;
+        li.append(h);
+      }
+      bubbleSources.append(li);
+    }
+    const quote = current().text.slice(claim.start, claim.end).replace(/\s+/g, " ").trim();
+    const search = document.createElement("li");
+    search.className = "search";
+    search.append(link("https://www.google.com/search?q=" + encodeURIComponent(quote), "Search the web for this claim \u2197"));
+    bubbleSources.append(search);
   }
 
   function hideBubble() {
@@ -476,14 +526,14 @@
   }
 
   review.addEventListener("click", (event) => {
-    const mark = event.target.closest("mark.false-claim");
+    const mark = event.target.closest("mark.claim");
     if (!mark) return;
     event.stopPropagation();
     if (mark === activeMark) return hideBubble();
     showBubble(mark, currentClaims[Number(mark.dataset.claim)]);
   });
   review.addEventListener("keydown", (event) => {
-    if ((event.key === "Enter" || event.key === " ") && event.target.matches("mark.false-claim")) {
+    if ((event.key === "Enter" || event.key === " ") && event.target.matches("mark.claim")) {
       event.preventDefault();
       event.target.click();
     }

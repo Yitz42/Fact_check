@@ -1,7 +1,16 @@
 # Fact Check
 
-Paste text or upload files. Claims that are factually false are underlined in **red**,
-in place. Click one to see a bubble with the corrected fact.
+Paste text or upload files. Flagged claims are highlighted in place, one colour per verdict:
+
+| Colour | Meaning |
+|---|---|
+| **Red** | False: the claim is clearly wrong. |
+| **Orange** | Misrepresented: a true basis that is distorted, exaggerated, cherry-picked, misquoted or missing context that changes its meaning. |
+| **Yellow** | Can't be said definitely: stated as fact, but disputed, unproven or not reliably established. |
+
+Click a highlight to see a bubble with what's actually true, why the claim was flagged, and
+links to sources. The sources come from the AI (only `http`/`https` links are shown, at most
+three), so open them to confirm; every bubble also has a "Search the web for this claim" link.
 
 **Your text is never changed.** The AI only returns short quotes; the page finds each quote
 verbatim in your original text (quotes it can't find are dropped, never guessed) and draws
@@ -56,13 +65,14 @@ Long documents are checked in pieces, so size is limited only by the AI service'
 
 ## Test
 
-Open `tests.html` in a browser (served as above). The tab title says `ALL n PASSED`. The tests cover quote matching, chunking, and the request format of every provider.
+Open `tests.html` in a browser (served as above). The tab title says `ALL n PASSED`. The tests cover quote matching, verdicts, source-link filtering, chunking, and the request format of every provider.
 
 ## Limits
 
 - The AI judges from its own training knowledge, with no web lookup. It can miss very recent
   events or flag things wrongly, and the free model is weaker than Claude. Treat flags as
-  prompts to verify.
+  prompts to verify. Source links are suggested from the AI's memory, not looked up, so a
+  link can be wrong or dead; the web-search link always works.
 - Highlights sit on the text the page extracted. For PDF/Word/HTML that isn't the original layout.
 - Browsers can block a hosted https page from reaching `http://localhost` Ollama (Safari does).
   Chrome and Firefox allow it.

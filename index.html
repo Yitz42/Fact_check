@@ -23,7 +23,7 @@
 <main>
   <section class="hero">
     <h1>Find what's false. Keep every word.</h1>
-    <p>Paste or upload your text. Anything untrue is underlined in red; click it to see the corrected fact. Your text is never edited.</p>
+    <p>Paste or upload your text. False claims are marked in red, misrepresented ones in orange, and claims that can't be stated as definite in yellow. Click one to see the facts and sources. Your text is never edited.</p>
   </section>
 
   <section class="editor" aria-label="Text to check">
@@ -42,6 +42,12 @@
     <div id="drop" class="drop">
       <textarea id="input" placeholder="Paste or type your text here, or drop a file (.txt .md .pdf .docx .html .csv …)" spellcheck="false" autofocus></textarea>
       <div id="review" class="review" hidden></div>
+    </div>
+
+    <div id="legend" class="legend" hidden>
+      <span class="key" data-verdict="false"><i aria-hidden="true"></i>False</span>
+      <span class="key" data-verdict="misleading"><i aria-hidden="true"></i>Misrepresented</span>
+      <span class="key" data-verdict="unverified"><i aria-hidden="true"></i>Can't be said definitely</span>
     </div>
 
     <div class="editor-foot">
@@ -108,10 +114,15 @@
   </form>
 </dialog>
 
-<div id="bubble" class="bubble" role="dialog" aria-label="Corrected fact" hidden>
-  <div class="bubble-label">Corrected fact</div>
+<div id="bubble" class="bubble" role="dialog" aria-labelledby="bubble-label" hidden>
+  <div id="bubble-label" class="bubble-label">Corrected fact</div>
   <p id="bubble-correction" class="bubble-correction"></p>
   <p id="bubble-why" class="bubble-why"></p>
+  <div class="bubble-sources">
+    <div class="bubble-sources-head">Sources</div>
+    <ul id="bubble-sources"></ul>
+    <p class="bubble-sources-note">Links are suggested by the AI. Open them to confirm.</p>
+  </div>
 </div>
 
 <script src="core.js"></script>

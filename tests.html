@@ -53,6 +53,37 @@
     const r = C.locateClaims("abc def", [{ quote: "def" }], 100);
     ok(r.located[0].start === 104 && r.located[0].end === 107);
   });
+  await test("locate: verdict and sources are carried over; old replies default to false", () => {
+    const text = "Paris is in Germany. Coffee doubles your lifespan. Shakespeare wrote exactly 39 plays.";
+    const r = C.locateClaims(text, [
+      { quote: "in Germany", correction: "France" },
+      { quote: "doubles your lifespan", verdict: "misleading", correction: "x", sources: [{ title: "WHO", url: "https://www.who.int/" }] },
+      { quote: "exactly 39 plays", verdict: "unverified", correction: "y", sources: [] },
+    ]);
+    ok(eq(r.located.map((c) => c.verdict), ["false", "misleading", "unverified"]), JSON.stringify(r.located));
+    ok(eq(r.located[1].sources, [{ title: "WHO", url: "https://www.who.int/" }]));
+    ok(eq(r.located[0].sources, []) && eq(r.located[2].sources, []));
+  });
+  await test("verdict: loose wordings map to the three colours", () => {
+    ok(C.normalizeVerdict("Misrepresented") === "misleading" && C.normalizeVerdict("missing context") === "misleading");
+    ok(C.normalizeVerdict("disputed") === "unverified" && C.normalizeVerdict("Can't be stated definitively") === "unverified");
+    ok(C.normalizeVerdict("FALSE") === "false" && C.normalizeVerdict(undefined) === "false" && C.normalizeVerdict("significant error") === "false");
+  });
+  await test("sources: only http(s) links, at most 3, no repeats, missing titles use the host", () => {
+    const s = C.cleanSources([
+      { title: "Bad", url: "javascript:alert(1)" }, { title: "Data", url: "data:text/html,hi" }, { title: "Rel", url: "/wiki/x" },
+      { title: "", url: "https://www.britannica.com/place/Paris" }, "https://en.wikipedia.org/wiki/Paris",
+      { title: "Dup", url: "https://en.wikipedia.org/wiki/Paris" }, { title: "Gov", url: "http://example.gov/a" }, { title: "Fourth", url: "https://x.org" },
+    ]);
+    ok(eq(s.map((x) => x.url), ["https://www.britannica.com/place/Paris", "https://en.wikipedia.org/wiki/Paris", "http://example.gov/a"]), JSON.stringify(s));
+    ok(s[0].title === "britannica.com" && s[1].title === "en.wikipedia.org");
+    ok(eq(C.cleanSources(undefined), []) && eq(C.cleanSources("https://x.org"), []));
+  });
+  await test("schema and prompt ask for a verdict and sources", () => {
+    const item = C.SCHEMA.properties.claims.items;
+    ok(eq(item.properties.verdict.enum, ["false", "misleading", "unverified"]) && item.required.includes("sources"));
+    ok(/misleading/.test(C.SYSTEM_PROMPT) && /unverified/.test(C.SYSTEM_PROMPT) && /Never invent a URL/.test(C.SYSTEM_PROMPT));
+  });
   await test("parse: plain JSON, fenced JSON, and JSON inside prose", () => {
     const body = '{"claims":[{"quote":"a","correction":"b","explanation":"c"}]}';
     ok(C.parseClaims(body).length === 1);
@@ -100,7 +131,7 @@
     ok(c.headers["x-api-key"] === "sk-ant-x" && c.headers["anthropic-dangerous-direct-browser-access"] === "true");
     ok(c.body.model === "claude-opus-5-5" && !("tool_choice" in c.body));
     ok(c.body.output_config.format.type === "json_schema");
-    ok(r.claims.length === 1 && r.claims[0].start === 12);
+    ok(r.claims.length === 1 && r.claims[0].start === 12 && r.claims[0].verdict === "false");
   });
   await test("anthropic: retries without output_config if the model rejects it", async () => {
     const calls = stubFetch((url, body, n) => n === 1
