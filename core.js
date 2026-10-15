@@ -23,13 +23,16 @@
     'Reply with ONLY a JSON object of the form {"claims":[{"quote":"...","verdict":"false|misleading|unverified","correction":"...","explanation":"...","sources":[{"title":"...","url":"https://..."}]}]}.',
   ].join("\n");
 
-  // Added when Claude may search the web (opt-in), so sources are real pages it actually found.
-  const SEARCH_PROMPT = SYSTEM_PROMPT + "\n\n" + [
-    "You can use the web_search tool. Search to confirm or rule out claims you are not certain about, and to find sources.",
+  // Added when the AI may search the web (opt-in), so sources are real pages it actually found.
+  const searchPrompt = (tool) => SYSTEM_PROMPT + "\n\n" + [
+    "You can use " + tool + ". Search to confirm or rule out claims you are not certain about, and to find sources.",
     "- Every source `url` must be copied exactly from your search results.",
     "- When you have finished searching, reply with ONLY the JSON object, with no other text before or after it.",
   ].join("\n");
-  // Searches per checked part (each costs about $0.01 on the Anthropic bill).
+  const SEARCH_PROMPT = searchPrompt("the web_search tool");
+  const GEMINI_SEARCH_PROMPT = searchPrompt("Google Search");
+  // Claude searches per checked part (each costs about $0.01 on the Anthropic bill).
+  // Gemini's Google Search has no such cap; Gemini decides how many queries to run.
   const MAX_SEARCHES = 10;
 
   // Severity, most serious first. Each is drawn in its own colour (red, orange, yellow).
@@ -84,7 +87,7 @@
       privacy: "Runs on a small open model (GPT-OSS 20B) hosted by Pollinations.ai. It's less accurate than the others, and your text is sent to that service, so don't use it for sensitive documents." },
     { id: "anthropic", label: "Claude (Anthropic)", short: "Claude", api: "anthropic", group: "cloud", chunk: CHUNK.large,
       defaultModel: "claude-opus-5-5", keyUrl: "https://console.anthropic.com/settings/keys", keyHost: "console.anthropic.com",
-      webSearch: true,
+      webSearch: { label: "web search" },
       models: [["claude-sonnet-5-5", "Claude Sonnet 5.5"], ["claude-opus-5-5", "Claude Opus 5.5"], ["claude-fable-5-1", "Claude Fable 5.1"], ["claude-haiku-4-5", "Claude Haiku 4.5"]],
       keyNote: "It must be an API key (a Claude.ai or Claude Code login won't work)." },
     { id: "openai", label: "ChatGPT (OpenAI)", short: "ChatGPT", api: "openai", group: "cloud", chunk: CHUNK.large,
@@ -94,6 +97,7 @@
     { id: "gemini", label: "Gemini (Google)", short: "Gemini", api: "gemini", group: "cloud", chunk: CHUNK.large,
       base: "https://generativelanguage.googleapis.com/v1beta", defaultModel: "gemini-2.5-pro", keyUrl: "https://aistudio.google.com/apikey", keyHost: "aistudio.google.com",
       models: [["gemini-2.5-flash", "gemini-2.5-flash"], ["gemini-2.5-pro", "gemini-2.5-pro"]],
+      webSearch: { label: "Google Search" },
       keyNote: "Google AI Studio keys have a free tier." },
     { id: "mistral", label: "Mistral", short: "Mistral", api: "openai", group: "cloud", chunk: CHUNK.medium,
       base: "https://api.mistral.ai/v1", defaultModel: "mistral-large-latest", keyUrl: "https://console.mistral.ai/api-keys", keyHost: "console.mistral.ai",
@@ -189,8 +193,19 @@
     } catch (_) { return ""; }
   }
 
+  // Pages a web search returned: `urls` holds exact urlKey()s, `sites` holds hostnames for
+  // searches that only reveal the site (Gemini hands back Google redirect links, titled by site).
+  const newFound = () => ({ urls: new Set(), sites: new Set() });
+
+  function siteMatch(host, sites) {
+    host = host.toLowerCase().replace(/^www\./, "");
+    for (const site of sites) if (host === site || host.endsWith("." + site)) return true;
+    return false;
+  }
+
   // Keep only well-formed http(s) links (never javascript: or data:), at most 3, no repeats.
-  // `found` (a Set of urlKey()s from a web search) marks the links the search really returned.
+  // With `found` from a web search, each link is marked fromSearch, and siteOnly when the
+  // search only showed that the site was found, not that exact page.
   function cleanSources(list, found) {
     const out = [];
     for (const item of Array.isArray(list) ? list : []) {
@@ -201,7 +216,10 @@
       if (out.some((s) => s.url === url.href)) continue;
       const title = String((item && item.title) || "").trim() || url.hostname.replace(/^www\./, "");
       const src = { title, url: url.href };
-      if (found) src.fromSearch = found.has(urlKey(url.href));
+      if (found) {
+        src.fromSearch = found.urls.has(urlKey(url.href));
+        if (!src.fromSearch && siteMatch(url.hostname, found.sites)) { src.fromSearch = true; src.siteOnly = true; }
+      }
       out.push(src);
       if (out.length === 3) break;
     }
@@ -371,8 +389,8 @@
 
   // Every page the search returned or cited, as urlKey()s.
   function searchedUrls(blocks) {
-    const found = new Set();
-    const add = (u) => { const k = urlKey(u); if (k) found.add(k); };
+    const found = newFound();
+    const add = (u) => { const k = urlKey(u); if (k) found.urls.add(k); };
     for (const b of blocks) {
       if (b.type === "web_search_tool_result" && Array.isArray(b.content)) b.content.forEach((r) => add(r.url));
       if (b.type === "text" && Array.isArray(b.citations)) b.citations.forEach((c) => add(c.url));
@@ -414,11 +432,16 @@
 
   async function askGemini(engine, text) {
     const model = String(engine.model).replace(/^models\//, "");
-    const data = await request(engine.base + "/models/" + encodeURIComponent(model) + ":generateContent", jsonPost({
-      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    const body = {
+      systemInstruction: { parts: [{ text: engine.webSearch ? GEMINI_SEARCH_PROMPT : SYSTEM_PROMPT }] },
       contents: [{ role: "user", parts: [{ text: userMessage(text) }] }],
-      generationConfig: { responseMimeType: "application/json" },
-    }, { "x-goog-api-key": engine.key }), "Gemini");
+    };
+    // Grounded answers can lose their source list in JSON mode, so with search on the prompt
+    // alone asks for JSON (parseClaims tolerates stray prose).
+    if (engine.webSearch) body.tools = [{ google_search: {} }];
+    else body.generationConfig = { responseMimeType: "application/json" };
+    const data = await request(engine.base + "/models/" + encodeURIComponent(model) + ":generateContent",
+      jsonPost(body, { "x-goog-api-key": engine.key }), "Gemini");
     if (data.promptFeedback && data.promptFeedback.blockReason) {
       throw new ApiError("Gemini declined to check this text (" + data.promptFeedback.blockReason + ").", 0);
     }
@@ -426,7 +449,28 @@
     if (!cand) throw new ApiError("Gemini returned no answer.", 0);
     if (cand.finishReason === "MAX_TOKENS") throw new ApiError("The AI's reply was cut off. Try a shorter text.", 0);
     const parts = (cand.content && cand.content.parts) || [];
-    return parts.filter((p) => !p.thought && typeof p.text === "string").map((p) => p.text).join("");
+    const answer = parts.filter((p) => !p.thought && typeof p.text === "string").map((p) => p.text).join("");
+    if (!engine.webSearch) return answer;
+    const meta = cand.groundingMetadata || {};
+    const found = newFound();
+    for (const chunk of meta.groundingChunks || []) {
+      const web = chunk && chunk.web;
+      if (!web) continue;
+      const key = urlKey(web.uri);
+      if (key) found.urls.add(key);
+      // The link is usually a Google redirect; the title is usually the site, e.g. "wikipedia.org".
+      const title = String(web.title || "").trim().toLowerCase().replace(/^www\./, "");
+      if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(title)) found.sites.add(title);
+      try {
+        const host = new URL(web.uri).hostname.toLowerCase().replace(/^www\./, "");
+        if (!/(^|\.)google\.com$/.test(host)) found.sites.add(host);
+      } catch (_) { /* no usable link */ }
+    }
+    const suggestion = meta.searchEntryPoint && meta.searchEntryPoint.renderedContent;
+    return {
+      text: answer, found, searches: (meta.webSearchQueries || []).length,
+      suggestions: typeof suggestion === "string" && suggestion ? [suggestion] : [],
+    };
   }
 
   async function askOllama(engine, text) {
@@ -526,6 +570,7 @@
     let failedParts = 0;
     let lastError = null;
     let searches = 0;
+    const suggestions = [];
     for (let i = 0; i < chunks.length; i++) {
       if (onProgress && chunks.length > 1) onProgress(i + 1, chunks.length);
       const piece = text.slice(chunks[i].start, chunks[i].end);
@@ -533,6 +578,7 @@
         const reply = await ASK[engine.api](engine, piece);
         const raw = typeof reply === "string" ? reply : reply.text;
         if (reply.searches) searches += reply.searches;
+        for (const html of reply.suggestions || []) if (!suggestions.includes(html)) suggestions.push(html);
         const result = locateClaims(piece, parseClaims(raw), chunks[i].start, reply.found);
         claims.push(...result.located);
         unplaced += result.dropped;
@@ -544,11 +590,11 @@
     }
     if (failedParts === chunks.length && lastError) throw lastError;
     claims.sort((a, b) => a.start - b.start);
-    return { claims, unplaced, failedParts, parts: chunks.length, searches };
+    return { claims, unplaced, failedParts, parts: chunks.length, searches, suggestions };
   }
 
   root.FactCore = {
-    SYSTEM_PROMPT, SEARCH_PROMPT, MAX_SEARCHES, SCHEMA, VERDICTS, FREE_MODEL, DEFAULT_ANTHROPIC_MODEL, DEFAULT_OLLAMA_URL, CHUNK, PROVIDERS,
+    SYSTEM_PROMPT, SEARCH_PROMPT, GEMINI_SEARCH_PROMPT, MAX_SEARCHES, SCHEMA, VERDICTS, FREE_MODEL, DEFAULT_ANTHROPIC_MODEL, DEFAULT_OLLAMA_URL, CHUNK, PROVIDERS,
     providerById, engineFor, splitChunks, normalizeVerdict, cleanSources, locateClaims, parseClaims, checkText, listModels, scoreModel, rankModels,
   };
 })(typeof window !== "undefined" ? window : globalThis);

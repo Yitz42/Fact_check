@@ -12,24 +12,27 @@ Click a highlight to see a bubble with what's actually true, why the claim was f
 links to sources. The sources come from the AI (only `http`/`https` links are shown, at most
 three), so open them to confirm; every bubble also has a "Search the web for this claim" link.
 
-### Real sources with Claude web search (optional)
+### Real sources with web search (optional, Claude or Gemini)
 
-With **Claude** selected, tick **Search the web for real sources** in the engine settings.
-Claude then looks claims up online while checking, and each source it found is marked
-**✓ found by web search** (the page compares every link with the search results, so a link
-from memory is never shown as found). It is off by default because it is slower and Anthropic
-bills it separately: about $0.01 per search, at most 10 searches per part of your text, plus
-the tokens the results use. The status line says how many searches ran. If your Anthropic
-organization has web search turned off, the page says so; an admin can turn it on in the
-Claude Console under Settings → Capabilities.
+With **Claude** or **Gemini** selected, tick **Search the web for real sources** in the engine
+settings. The box is separate for each, off by default, and never used by other providers.
+The AI then looks claims up online while checking, and the page compares every source link
+with what the search actually returned, so a link from memory is never shown as found:
 
-**Your text is never changed.** The AI only returns short quotes; the page finds each quote
-verbatim in your original text (quotes it can't find are dropped, never guessed) and draws
-highlights over your exact text. It also asserts that the displayed text equals your input.
+- **Claude** reports the exact pages it found, so matching links are marked
+  **✓ found by web search**. Anthropic bills about $0.01 per search, at most 10 searches per
+  part of your text, plus the tokens the results use. If your Anthropic organization has web
+  search turned off, the page says so; an admin can turn it on in the Claude Console under
+  Settings → Capabilities.
+- **Gemini** uses Google Search, which only reveals the sites it found (its links are Google
+  redirects). A link on one of those sites is marked **✓ site found by search**: the site was
+  searched, but the exact page came from memory, so open it to confirm. Google redirect links
+  are marked **✓ found by web search** and shown as "via Google Search". Google's search
+  suggestions are shown under your text, in a sandboxed frame (no scripts, links open in a new
+  tab), as Google asks for grounded answers. Grounded requests are billed separately after a
+  free allowance; see [Google's pricing page](https://ai.google.dev/gemini-api/docs/pricing).
 
-It's a small static site (no server, no install, no build): `index.html`, `style.css`,
-`core.js`, `app.js`. It works on computers and phones. The AI is called straight from the
-browser.
+Searching is slower than checking from memory. The status line says how many searches ran.
 
 ## Run
 
@@ -76,13 +79,13 @@ Long documents are checked in pieces, so size is limited only by the AI service'
 
 ## Test
 
-Open `tests.html` in a browser (served as above). The tab title says `ALL n PASSED`. The tests cover quote matching, verdicts, source-link filtering, Claude web search (including paused turns and the fallback for older models), chunking, and the request format of every provider.
+Open `tests.html` in a browser (served as above). The tab title says `ALL n PASSED`. The tests cover quote matching, verdicts, source-link filtering, Claude and Gemini web search (paused Claude turns, the fallback for older Claude models, Gemini site matching), chunking, and the request format of every provider.
 
 ## Limits
 
 - The AI judges from its own training knowledge, with no web lookup. It can miss very recent
   events or flag things wrongly, and the free model is weaker than Claude. Treat flags as
-  prompts to verify. Unless Claude web search is on, source links are suggested from the AI's
+  prompts to verify. Unless web search is on, source links are suggested from the AI's
   memory, not looked up, so a link can be wrong or dead; the web-search link always works.
 - Highlights sit on the text the page extracted. For PDF/Word/HTML that isn't the original layout.
 - Browsers can block a hosted https page from reaching `http://localhost` Ollama (Safari does).

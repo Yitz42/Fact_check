@@ -23,6 +23,9 @@
   const rememberEl = $("remember");
   const searchFieldEl = $("search-field");
   const webSearchEl = $("web-search");
+  const searchHintEl = $("search-hint");
+  const suggestionsEl = $("suggestions");
+  const suggestionsListEl = $("suggestions-list");
   const modelEl = $("model");
   const modelMenuEl = $("model-menu");
   const providerEl = $("provider");
@@ -60,6 +63,9 @@
   cfg.models = cfg.models || {};
   cfg.urls = cfg.urls || {};
   cfg.recent = cfg.recent || {};
+  // Web search is ticked per provider. (An earlier version had one switch, for Claude.)
+  cfg.search = cfg.search || (cfg.webSearch ? { anthropic: true } : {});
+  delete cfg.webSearch;
   const saveCfg = () => store.set("localStorage", "fc_cfg", JSON.stringify(cfg));
 
   // Keys live in memory per provider; each is saved under its own storage key.
@@ -207,8 +213,8 @@
     const base = p.needsUrl ? (cfg.urls[p.id] || "").trim() : "";
     const model = (cfg.models[p.id] || p.defaultModel || "").trim();
     if (p.needsUrl && (!base || !model)) return free;
-    const engine = Core.engineFor(p.id, { key, model, base, webSearch: cfg.webSearch });
-    engine.label = `${p.short} · ${modelName(p, model)}${engine.webSearch ? " · web search" : ""}`;
+    const engine = Core.engineFor(p.id, { key, model, base, webSearch: cfg.search[p.id] });
+    engine.label = `${p.short} · ${modelName(p, model)}${engine.webSearch ? " · " + p.webSearch.label : ""}`;
     return engine;
   }
 
@@ -234,7 +240,13 @@
     keyEl.value = keys[p.id] || "";
     rememberEl.checked = remembered(p.id);
     searchFieldEl.hidden = !p.webSearch;
-    webSearchEl.checked = Boolean(cfg.webSearch);
+    webSearchEl.checked = Boolean(cfg.search[p.id]);
+    searchHintEl.replaceChildren(SEARCH_HINT[p.id] || "");
+    if (p.id === "gemini") {
+      const a = document.createElement("a");
+      a.href = "https://ai.google.dev/gemini-api/docs/pricing"; a.target = "_blank"; a.rel = "noopener"; a.textContent = "Google's pricing page";
+      searchHintEl.append(a, ".");
+    }
     modelEl.value = cfg.models[p.id] || p.defaultModel || "";
     modelEl.placeholder = p.defaultModel || "Model name";
     renderModelMenu(p);
@@ -247,6 +259,11 @@
     }
     keyHintEl.append(`${p.keyNote ? p.keyNote + " " : ""}It goes straight from this page to ${p.needsUrl ? "that server" : p.short} and is only saved if you tick the box.`);
   }
+
+  const SEARCH_HINT = {
+    anthropic: "Claude looks claims up online and links the pages it found. Slower, and Anthropic bills about $0.01 per search (up to 10 per part of your text) on top of normal usage.",
+    gemini: "Gemini looks claims up with Google Search. Google only reveals which sites it found, so links are matched by site, and Google's search suggestions are shown under your text. Slower, and grounded requests are billed separately after a free allowance: see ",
+  };
 
   function saveKey() {
     const id = cfg.provider;
@@ -280,7 +297,7 @@
   });
   keyEl.addEventListener("input", saveKey);
   rememberEl.addEventListener("change", saveKey);
-  webSearchEl.addEventListener("change", () => { cfg.webSearch = webSearchEl.checked; saveCfg(); refreshEngine(); });
+  webSearchEl.addEventListener("change", () => { cfg.search[cfg.provider] = webSearchEl.checked; saveCfg(); refreshEngine(); });
   modelEl.addEventListener("input", () => {
     cfg.models[cfg.provider] = modelEl.value.trim();
     saveCfg();
@@ -423,6 +440,7 @@
       checkBtn.hidden = true;
       editBtn.hidden = false;
       legendEl.hidden = !doc.claims.length;
+      showSuggestions(doc.suggestions);
       let message = doc.claims.length ? `${summarize(doc.claims)}. Click a highlight for the facts and sources.` : "Nothing false, misrepresented or uncertain found.";
       if (doc.unplaced) message += ` (${doc.unplaced} couldn't be located in the text.)`;
       if (doc.note) message += ` ${doc.note}`;
@@ -430,6 +448,7 @@
     } else {
       input.value = doc.text;
       legendEl.hidden = true;
+      showSuggestions([]);
       input.hidden = false;
       review.hidden = true;
       checkBtn.hidden = false;
@@ -439,6 +458,22 @@
   }
 
   input.addEventListener("input", () => { current().text = input.value; });
+
+  // Google's search suggestions (shown whenever Gemini used Google Search). Their HTML comes from
+  // Google, so it goes in a sandboxed frame: no scripts, no access to this page, links open in a new tab.
+  function showSuggestions(list) {
+    list = list || [];
+    suggestionsEl.hidden = !list.length;
+    suggestionsListEl.replaceChildren(...list.map((html) => {
+      const frame = document.createElement("iframe");
+      frame.className = "suggestion";
+      frame.title = "Google Search suggestions";
+      frame.setAttribute("sandbox", "allow-popups allow-popups-to-escape-sandbox");
+      frame.setAttribute("referrerpolicy", "no-referrer");
+      frame.srcdoc = '<!doctype html><meta charset="utf-8"><base target="_blank"><style>body{margin:0}</style>' + html;
+      return frame;
+    }));
+  }
 
   // ---------- rendering: original text, unchanged, with <mark> around flagged ranges ----------
   const VERDICT_TEXT = {
@@ -510,16 +545,17 @@
       const li = document.createElement("li");
       li.append(link(src.url, src.title));
       const host = new URL(src.url).hostname.replace(/^www\./, "");
+      const viaGoogle = host === "vertexaisearch.cloud.google.com"; // Gemini's grounding redirect
       if (!src.title.includes(host)) {
         const h = document.createElement("span");
         h.className = "host";
-        h.textContent = ` (${host})`;
+        h.textContent = viaGoogle ? " (via Google Search)" : ` (${host})`;
         li.append(h);
       }
       if (src.fromSearch) {
         const b = document.createElement("span");
         b.className = "found";
-        b.textContent = "\u2713 found by web search";
+        b.textContent = src.siteOnly ? "\u2713 site found by search" : "\u2713 found by web search";
         li.append(" ", b);
       }
       bubbleSources.append(li);
@@ -531,9 +567,11 @@
     bubbleSources.append(search);
     bubbleSourcesNote.textContent = !claim.searched
       ? "Links are suggested by the AI from memory. Open them to confirm."
-      : claim.sources.every((s) => s.fromSearch)
-        ? "Found by Claude's web search. Open them to read the details."
-        : "Links marked \u2713 came from Claude's web search; the others are from memory, so confirm them.";
+      : claim.sources.every((s) => s.fromSearch && !s.siteOnly)
+        ? "Found by web search. Open them to read the details."
+        : claim.sources.some((s) => s.siteOnly)
+          ? "\u201cSite found\u201d means the search found pages on that site, but the exact link came from memory. Unmarked links are from memory too, so confirm them."
+          : "Links marked \u2713 came from the web search; the others are from memory, so confirm them.";
   }
 
   function hideBubble() {
@@ -577,6 +615,7 @@
       doc.claims = result.claims;
       if (engine.id !== "free") pushRecent(engine.id, engine.model);
       doc.unplaced = result.unplaced;
+      doc.suggestions = result.suggestions;
       const notes = [`Checked with ${engine.label}.`];
       if (cfg.provider !== "free" && engine.id === "free") notes.push("(Your chosen AI isn't set up yet, so the free model was used.)");
       if (result.searches) notes.push(`Ran ${result.searches} web search${result.searches === 1 ? "" : "es"}.`);

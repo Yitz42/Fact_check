@@ -218,6 +218,9 @@ mark.claim {
 }
 mark.claim:hover, mark.claim.active { background: var(--tone); color: var(--tone-fg); text-decoration-color: var(--tone-fg); }
 
+.suggestions { padding: 10px 14px 4px; border-top: 1px solid var(--border); }
+.suggestions-head { color: var(--muted); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.suggestion { display: block; width: 100%; height: 52px; margin: 2px 0 4px; border: 0; background: transparent; color-scheme: normal; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 10px 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; }
 .legend .key { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { width: 14px; height: 14px; border-radius: 4px; background: var(--tone-bg); border-bottom: 2px solid var(--tone); }

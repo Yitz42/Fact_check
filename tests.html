@@ -253,6 +253,38 @@
     ok(c.headers["x-goog-api-key"] === "AIza-x" && c.body.generationConfig.responseMimeType === "application/json");
     ok(c.body.systemInstruction.parts[0].text === C.SYSTEM_PROMPT && r.claims.length === 1);
   });
+  await test("gemini Google Search: tool sent, no JSON mode, sources matched by site, suggestions kept", async () => {
+    const redirect = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC123";
+    const answer = JSON.stringify({ claims: [{ quote: "Sydney", verdict: "false", correction: "Canberra.", explanation: "e", sources: [
+      { title: "Canberra - Wikipedia", url: "https://en.wikipedia.org/wiki/Canberra" },
+      { title: "Grounded link", url: redirect },
+      { title: "Made up", url: "https://example.com/x" },
+      { title: "Lookalike", url: "https://notwikipedia.org/x" }] }] });
+    const calls = stubFetch(() => ({ json: { candidates: [{ finishReason: "STOP",
+      content: { parts: [{ text: "Here is the result:\n" + answer }] },
+      groundingMetadata: {
+        webSearchQueries: ["capital of australia", "canberra capital"],
+        searchEntryPoint: { renderedContent: "<div class=chips>canberra</div>" },
+        groundingChunks: [{ web: { uri: redirect, title: "wikipedia.org" } }, { web: { uri: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/Z", title: "britannica.com" } }],
+      } }] } }));
+    const r = await C.checkText("The capital is Sydney.", C.engineFor("gemini", { key: "k", model: "gemini-2.5-pro", webSearch: true }));
+    const b = calls[0].body;
+    ok(eq(b.tools, [{ google_search: {} }]) && !("generationConfig" in b), JSON.stringify(b));
+    ok(b.systemInstruction.parts[0].text === C.GEMINI_SEARCH_PROMPT);
+    ok(r.claims.length === 1 && r.searches === 2 && eq(r.suggestions, ["<div class=chips>canberra</div>"]), JSON.stringify(r));
+    const src = r.claims[0].sources;
+    ok(src.length === 3, "max 3");
+    ok(src[0].fromSearch === true && src[0].siteOnly === true, "wikipedia matched by site");
+    ok(src[1].fromSearch === true && !src[1].siteOnly, "redirect link matched exactly");
+    ok(src[2].fromSearch === false, "unrelated site not marked");
+    ok(!C.engineFor("gemini", { key: "k" }).webSearch, "off unless ticked");
+  });
+  await test("sources: site matching doesn't accept lookalike domains", async () => {
+    stubFetch(() => ({ json: { candidates: [{ content: { parts: [{ text: JSON.stringify({ claims: [{ quote: "Sydney", sources: [{ title: "x", url: "https://notwikipedia.org/a" }] }] }) }] },
+      groundingMetadata: { groundingChunks: [{ web: { uri: "https://vertexaisearch.cloud.google.com/r/1", title: "wikipedia.org" } }] } }] } }));
+    const r = await C.checkText("The capital is Sydney.", C.engineFor("gemini", { key: "k", webSearch: true }));
+    ok(r.claims[0].sources[0].fromSearch === false, JSON.stringify(r.claims[0].sources));
+  });
   await test("gemini: blocked prompt gives a clear error", async () => {
     stubFetch(() => ({ json: { promptFeedback: { blockReason: "SAFETY" } } }));
     let msg = "";
